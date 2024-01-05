@@ -1,0 +1,916 @@
+---
+title: "Annotation extension - marker exploration"
+date: "2024-01-05"
+output:
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(sctransform)
+  library(rgl)
+  library(patchwork)
+  library(ggrepel)
+  library(ggpubr)
+  library(dplyr) 
+  library(stringr)
+  library(purrr)
+  library(readr)
+  library(tibble)
+  library(ggplot2)
+  library(ggnewscale)
+  library(tidyr)
+  library(cowplot)
+  library(scDblFinder)
+  library(SeuratData)
+  library(SeuratDisk)
+  library(scmap)
+  library(SingleCellExperiment)
+  library(pheatmap)
+  library(plotly)
+  library(Hmisc)
+  library(rmarkdown)
+  library(RColorBrewer)
+  # library(MAST)
+  library(Platypus)
+  library(ggvenn)
+  library('biomaRt')
+  library(conflicted)
+  library(SoupX)
+  library(MetBrewer)
+  library(knitr)
+  library(readxl)
+  library(SCpubr)
+  library(ggh4x)
+  library(htmlwidgets)
+  library(slingshot)
+  library(harmony)
+  library(ggforce)
+  conflict_prefer("select", "dplyr")
+  conflict_prefer("filter", "dplyr")
+  conflict_prefer("rename", "dplyr")
+})
+```
+
+
+#  integration of all MSC
+
+
+```{r}
+
+
+
+sp_colors <- c('Early ring'='#D1EC9F',
+                     'Late ring'='#78C679',
+                     'Early trophozoite'='#FEEEAA',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                     'Gametocyte (developing)'='thistle',
+                     'Gametocyte (female)'='#551A8B',
+                     'Gametocyte (male)'='mediumpurple',
+               'Unassigned'='red', 
+               'Not assigned'='#D6CFC7',
+               'Female (LE)'='#208cf7',
+               'Female'='#551A8B',
+               # 'Female (HE)'='#551A8B',
+               'Male (LE)'='#a894d1',
+               'Male'='mediumpurple',
+               # 'Male (HE)'='mediumpurple',
+               'Failed QC' = 'grey',
+               'Gametocyte (committed)' = '#C399A2', 
+               'Gametocyte (developing)' = '#66444C', 
+               'Gametocyte (branching)' = '#66444C', 
+               'Gametocyte (early female)' = '#749E89', 
+               'Gametocyte (early male)' = '#7D87B2', 
+               'Gametocyte (late female)' = '#4E6D58', 
+               'Gametocyte (late male)' = '#41507B',
+                   NULL = 'lightgrey'
+)
+
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   'Female'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   'Male'= 'mediumpurple',#'#039911',
+                   ## 'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Atlas' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle',
+                   'early female' = '#749E89',
+                   'late female'= '#4E6D58',
+                   NULL = 'lightgrey'
+)
+
+cluster_cols <- brewer.pal(7, name = 'Set2') %>% set_names(as.character(c(0:6)))
+
+
+
+stg_lvls = c("Early ring", "Late ring", "Early trophozoite","Late trophozoite" , "Early schizont", "Late schizont",  "Gametocyte (developing)", "Female (HE)", "Female", "Female (LE)",  "Gametocyte (female)", "Male (HE)", "Male", "Male (LE)", "Gametocyte (male)", "Unassigned", "Failed QC", "Not assigned")
+
+stg_refnd_lvls = c("Early ring", "Late ring", "Early trophozoite", "Late trophozoite", "Early schizont", "Late schizont", "Gametocyte (committed)", "Gametocyte (developing)", "Gametocyte (branching)", "Female (HE)", "Female", "Female (LE)", "Gametocyte (female)", "Gametocyte (early female)", "Gametocyte (late female)", "Gametocyte (male)", "Male (HE)", "Male", "Male (LE)", "Gametocyte (early male)", "Gametocyte (late male)", "Unassigned", "Failed qc", "Not assigned", "Atlas")
+
+stg_refnd_lvls2 = c('Early ring','Late ring','Early trophozoite','Late trophozoite','Early schizont','Late schizont', "Gametocyte (committed)","Gametocyte (developing)","Gametocyte (branching)", "Female (HE)", "Female", "Female (LE)", "Gametocyte (early female)","Gametocyte (late female)", "Male (HE)", "Male", "Male (LE)", "Gametocyte (early male)","Gametocyte (late male)", "Unassigned", "Failed QC", "Not assigned") #%>% str_to_sentence(.)
+
+# donor_cols_m = met.brewer("Egypt")[c(2,4,1,3)] %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ), '.mrna'))
+# donor_cols_m = met.brewer("Thomas")[c(6,3,1,2)]  %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ), '.mrna'))
+donor_cols_m = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ), '.mrna'))
+# donor_cols = met.brewer("Egypt")[c(2,4,1,3)] %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" )))
+donor_cols = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" )))
+# donor_cols_cap = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% str_to_upper(set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ))))
+
+
+```
+
+```{r pressure, echo=FALSE}
+# ggplot(cars, aes(x= dist, y =speed)) +
+#   geom_point()
+# graph2ppt(file = '/Users/jr35/Google Drive/My Drive/PHD_documents/test_exp2')
+```
+
+```{r}
+##Strain cluster colours
+
+strain_cols_n <-c("#910000", "#ff1a8d", "#007c71", "#0ea300", "#00deca", "#9a96c7", "#5d57a4", "#a8875b","#708db3", "#c39a00", "#ffd94d", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","thistle","#a40000" , "#00b7a7", "#e7f1f9", 'black', 'grey')
+#, 'lavender', 'lightgray', 'grey'
+names(strain_cols_n) <- c('SC2', 'SC1','SC5',  'SC4', 'SC3',  'SC6', 'SC7', 'SC8', 'S3_S1', 'S1_p_i','S1_b', 'S2_b', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'SC1_3i','Negative', 'Lab', 'Less5', NA)
+
+
+# strain_cols <- c(met.brewer(name = 'Austria')[c(1,7, 4,5,6, 7, 8)], 'light gray')
+strain_cols <- c(met.brewer(name = 'Thomas')[c(1:8)],'black', 'light gray')
+# names(strain_cols) = c('Strain 0', 'Strain 1', 'Strain 2', 'Doublet', 'Negative')
+names(strain_cols) = c('G1', 'G2', 'G3', 'G4','G5', 'G6','G7', 'G8', 'Doublet', 'Negative')
+# strain_cols = c("Strain 2" = "#dd5129", "Strain 1"= "#0f7ba2", "Strain 0"="#43b284", "Doublet"="#fab255")
+strain_cols =c(strain_cols,strain_cols_n)
+
+strain_dset_lvls = c( 'SC1', 'SC2','SC3',  'SC4', 'SC5',  'SC6', 'SC7', 'SC8')
+
+umap_theme <- theme(legend.position = 'right',
+        axis.title=element_text(size=12,face="bold",hjust = 0),
+        # plot.title = element_blank(),
+        legend.title=element_text(size=14,face="bold"),
+        legend.text=element_text(size=14),
+        legend.spacing.y = unit(0.25, "cm"),
+        axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"))
+        )  
+
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali')
+```
+
+
+initialize variable for the sample names
+
+```{r}
+# sample_id <- c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" )
+sample_id_lst <-as.list(c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" ) %>% 
+                          str_sort(., numeric = T))
+mt_filt <- c(5,1.2,1,0.45,2)
+sample_name_nms<-sample_id_lst
+optimum_k = c(5,2,2,8,2) %>% set_names(sample_name_nms)
+```
+
+```{r}
+msc_qcd_anotd <- readRDS("data/processed/DB52e_star/msc_qcd_anotd.RDS") %>% .[1:4]
+```
+
+
+```{r, message=FALSE}
+##Metadata from all p.falciparum genes downloaded from plasmoDB
+Pf3D7_genes_plasmoDB <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3d7_Genes_Summary_270922.csv") %>% 
+  dplyr::rename("gene_id" = `Gene ID` ) %>% 
+  group_by(gene_id) %>% 
+  add_count(name='gn_iso') %>% 
+  ungroup() %>%
+  mutate(across(gene_id, ~case_when(gn_iso>1 ~ source_id,
+                                    TRUE ~ as.character(.)))) %>% 
+  mutate(across(gene_id, ~str_replace(.,"_", "-")))%>%
+  dplyr::rename('Gene_name' = `Gene Name or Symbol`, 'Ka_Ks' = `NonSyn/Syn SNP Ratio All Strains`, 'TM_domains'=`# TM Domains`) %>% 
+  mutate(across(where(is.character), ~na_if(., "N/A")),
+         Gene = coalesce(`Gene_name`, gene_id) )  %>%
+  group_by(Gene) %>% 
+  add_count() %>% 
+  ungroup() %>%
+  dplyr::mutate(across(Gene, ~case_when(n>1 ~ paste0(.,'_', gene_id),
+                                        TRUE ~ as.character(.)))) 
+
+```
+
+
+### Average expression of gene sets to assess markers of the different stages to confirm assignments
+
+Function 
+```{r}
+makeSetScore <- function(seur, gene.set,assay='RNA', slt = 'data') {
+  # Get mean expression of genes of interest per cell
+  gene.set <- gene.set[gene.set %in% rownames(seur) ]
+  mean.exp <- colMeans(x = as.matrix(GetAssayData(seur, slot = slt, assay = assay))[gene.set, ], na.rm = TRUE)
+  
+  # Add mean expression values in 'object@meta.data$gene.set.score'
+  if (all(names(x = mean.exp) == rownames(x = seur@meta.data))) {
+    return(mean.exp)
+  }
+}
+
+```
+
+
+#### Gold standard gam and asexual markers from Lisette Meerstein-Kessel et al {.tabset}
+
+
+```{r, message=FALSE}
+kes_gam_m <- read_xlsx('data/raw/published_lit/kessel_markers_2018/41598_2017_18840_MOESM2_ESM.xlsx', sheet = 'Gametocytes-Positive set') %>% mutate(across(gene_ID, ~str_replace(., '_', '-')))
+kes_asx_m <- read_xlsx('data/raw/published_lit/kessel_markers_2018/41598_2017_18840_MOESM2_ESM.xlsx', sheet = 'Asexual Stages-Negative Set') %>% mutate(across(gene_ID, ~str_replace(., '_', '-')))
+
+lora_batille_egam_asex <- read_xlsx('data/raw/published_lit/lora_batille_2020/de_genes_file_s1.xlsx', sheet = 'fig5_hmap') %>% mutate(across(Gene_id, ~str_replace(., '_', '-')))
+```
+
+##### Average expression visualization {.tabset}
+```{r}
+
+# kes_gam_m_avg_exp <- msc_qcd_anotd[1:4] %>%
+kes_gam_m_avg_exp <- msc_qcd_anotd %>%
+  map(~makeSetScore(., kes_gam_m$gene_ID, assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('kes_gam_m') 
+  )
+
+kes_asx_m_avg_exp <- msc_qcd_anotd %>%
+  map(~makeSetScore(., kes_asx_m$gene_ID, assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('kes_asx_m') 
+  )
+
+lb_gam_m_avg_exp <- msc_qcd_anotd %>%
+  map(~makeSetScore(., lora_batille_egam_asex %>% filter(Direction == 'egam') %>% pull(Gene_id), assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('lb_gam_m') 
+  )
+
+lb_asx_m_avg_exp <- msc_qcd_anotd %>%
+  map(~makeSetScore(., lora_batille_egam_asex %>% filter(Direction == 'asex') %>% pull(Gene_id), assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('lb_asx_m') 
+  )
+
+
+# msc_qcd_anotd[1:4] <- list(msc_qcd_anotd[1:4], kes_gam_m_avg_exp[1:4], kes_asx_m_avg_exp[1:4], lb_gam_m_avg_exp[1:4], lb_asx_m_avg_exp[1:4]) %>%
+msc_qcd_anotd_marker_exp <- list(msc_qcd_anotd[1:4], kes_gam_m_avg_exp, kes_asx_m_avg_exp, lb_gam_m_avg_exp, lb_asx_m_avg_exp) %>%
+  pmap(~AddMetaData(..1, ..2) %>%
+         AddMetaData(., ..3)%>%
+         AddMetaData(., ..4)%>%
+         AddMetaData(., ..5))
+```
+
+
+```{r, results='asis', message=FALSE}
+msc_qcd_anotd_marker_exp <- map(msc_qcd_anotd_marker_exp, ~SetIdent(., value='stageHL'))
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    cat('Average gametocyte markers expression \n')
+    cat('\n')
+    print(FeaturePlot(., features = "kes_gam_m", dims = c(1,2), pt.size = 1.5, label = F, label.size = 5, repel = T) + 
+            scale_colour_gradientn(colours = brewer.pal(n = 9, name = "Blues")[2:9])+ 
+            theme(axis.text=element_text(size=18), 
+                  axis.title=element_text(size=18,face="bold"), 
+                  legend.text = element_text(size=18),
+                  legend.position="bottom",
+                  legend.key.width = unit(1.2, "cm")
+            )+
+            coord_fixed()
+          #guides(colour = guide_colorbar(barwidth = 17))
+    )
+    # export::graph2ppt(file= paste0('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/markers/kes_asx_gam_gold/gam_', .y))
+    cat('\n')
+    cat('\n')
+    
+    cat('Average asexual markers expression \n')
+    cat('\n')
+    print(FeaturePlot(., features = "kes_asx_m", dims = c(1,2), pt.size = 1, label = F, label.size = 5, repel = T) + 
+            scale_colour_gradientn(colours = brewer.pal(n = 9, name = "Blues")[2:9])+ 
+            theme(axis.text=element_text(size=18), 
+                  axis.title=element_text(size=18,face="bold"), 
+                  legend.text = element_text(size=18),
+                  legend.position="bottom",
+                  legend.key.width = unit(1.2, "cm")
+            )+
+            coord_fixed() 
+    )
+    # export::graph2ppt(file= paste0('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/markers/kes_asx_gam_gold/asx_', .y))
+    cat("\n")
+    cat("\n")
+  })
+
+```
+
+
+##### Dotplot visualization {.tabset}
+```{r, results='asis', message=FALSE, warning=FALSE, fig.width=12, fig.height=4.4}
+
+mk_gns2 <- kes_gam_m %>% left_join(., Pf3D7_genes_plasmoDB[, c("gene_id", "Gene")], by = c("gene_ID"= "gene_id"))
+
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    cat(' \n Average gametocyte markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = mk_gns2$gene_ID, group.by = 'stageHL') +
+            scale_x_discrete(labels= mk_gns2$Gene%>% rev())+
+            scale_fill_gradientn(	colours = brewer.pal(n = 9, name = "Blues"), na.value = 'grey50', name = "Avg. Expression", guide = guide_colorbar(title.position = "top", title.hjust = 0.5, order = 2, frame.colour ="grey50", ticks.colour = "white"))+
+            new_scale_fill() +
+            geom_tile(data = data.frame(Stage = factor(levels(.@meta.data$stageHL), levels = levels(.@meta.data$stageHL))), inherit.aes = F, aes(x=0, y=Stage, fill =Stage)) +
+            theme(axis.text.x = element_text(angle = 90, size = 16),
+                  axis.text.y = element_blank(),
+                  legend.text = element_text(size = 14), 
+                  legend.title = element_text(size = 14, face = 'bold'),
+                  legend.position = "bottom")+
+            # guides(fill = "none")#+
+            scale_fill_manual(values = sp_fld_colors, name = "Stage", guide = guide_legend(nrow = 2,  title.position = "top", order = 1))
+    )
+    
+    
+    # cat('\n')
+    # cat('\n')
+    
+    print(do_DotPlot(., features = kes_asx_m$gene_ID, group.by = 'stageHL') +
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% kes_asx_m$gene_ID) %>% pull(Gene)%>% rev())+
+            scale_fill_gradientn(	colours = brewer.pal(n = 9, name = "Blues"), na.value = 'grey50', name = "Avg. Expression", guide = guide_colorbar(title.position = "top", title.hjust = 0.5, order = 2, frame.colour ="grey50", ticks.colour = "white"))+
+            new_scale_fill() +
+            geom_tile(data = data.frame(Stage = factor(levels(.@meta.data$stageHL), levels = levels(.@meta.data$stageHL))), inherit.aes = F, aes(x=0, y=Stage, fill =Stage)) +
+            theme(axis.text.x = element_text(angle = 90, size = 16),
+                  axis.text.y = element_blank(),
+                  legend.text = element_text(size = 14), 
+                  legend.title = element_text(size = 14, face = 'bold'),
+                  legend.position = "bottom")+
+            scale_fill_manual(values = sp_fld_colors, name = "Stage", guide = guide_legend(nrow = 2,  title.position = "top", order = 1))
+    )
+    
+    cat(' \n Average asexual markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = kes_asx_m$gene_ID, group.by = 'stageHL') + 
+            theme(axis.text.x = element_text(angle = 90, size = 15),
+                  axis.text.y = element_text( size = 15),
+                  legend.text = element_text(size = 15))+ 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% kes_asx_m$gene_ID) %>% pull(Gene)%>% rev()))
+    cat("\n")
+    cat("\n")
+  })
+
+```
+
+##### Flipped Dotplot visualization {.tabset}
+
+```{r, results='asis', message=FALSE, warning=FALSE, fig.width=4.2, fig.height=12}
+##!!!NOTE - Stage legend plotted, cropped and then turned off - manual modification
+# dot_pts <- list()
+
+mark_dot_plts<- msc_qcd_anotd_marker_exp  %>% 
+  purrr::imap(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    cat(' \n Average gametocyte markers expression \n')
+    # cat('\n')
+    seu_obj<- .x
+    print(seu_obj)
+    dot_pts <- map(list(kes_gam_m,kes_asx_m), 
+                   ~do_DotPlot(seu_obj, features = .x$gene_ID, group.by = 'stageHL') +
+                     scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% .x$gene_ID) %>% pull(Gene)%>% rev()) +
+                     scale_fill_gradientn(colours = brewer.pal(n = 9, name = "Blues"), na.value = 'grey50', name = "Avg. Expression", guide = guide_colorbar(title.position = "top", title.hjust = 0.5, order = 2, frame.colour ="grey50", ticks.colour = "white"))+
+                     new_scale_fill() +
+                     geom_tile(data = data.frame(Stage = factor(levels(seu_obj@meta.data$stageHL), levels = levels(seu_obj@meta.data$stageHL))), inherit.aes = F, aes(x=0, y=Stage, fill =Stage)) +
+                     theme(axis.text.y = element_text(size = 16),
+                           axis.text.x = element_blank(),
+                           axis.ticks.x = element_blank(),
+                           legend.text = element_text(size = 14), 
+                           legend.title = element_text(size = 14, face = 'bold'),
+                           legend.position = "bottom", 
+                           legend.box = "horizontal",
+                           legend.spacing.x = unit(0.02, "cm"),
+                           legend.key.width = unit(0.4, "cm"),
+                           legend.box.margin = margin(t = 0, r = 4.1, b = 0, l = 0, unit = "cm")
+                     )+
+                     scale_fill_manual(values = sp_fld_colors, name = "Stage", guide = guide_legend(nrow = 2,  title.position = "top", order = 1)) + 
+                     ##!!NOTE - turning off stage label after screen shotting - switch back on if needed
+                     guides(fill=F, size = guide_legend(title = "% Expressed", title.position = "top")) +
+                     coord_flip()
+    )
+    print(dot_pts)
+    
+    
+    return(dot_pts)
+    
+    cat("\n")
+    cat("\n")
+  })
+
+# mark_dot_plts
+
+
+```
+
+#### Key markers visualization {.tabset}
+```{r, results='asis', message=FALSE, fig.width=4, fig.height=4}
+msc_qcd_anotd_marker_exp <- map(msc_qcd_anotd_marker_exp, ~SetIdent(., value='stageHL'))
+
+k_markrs_plt<- list()
+
+markrs_plt <- msc_qcd_anotd_marker_exp  %>% 
+  purrr::imap(.,~{
+    # create tabset for each group 
+    cat('##### ',.y,'   \n')
+    cat('Late ring markers expression (REX1) \n')
+    cat('\n')
+    gn_nms = c("REX1", "Pfs16", "P25", "DHC")#"ETRAMP5", 
+    obj = .x
+    gns=c("PF3D7-0935900",  "PF3D7-0406200", "PF3D7-1031000", "PF3D7-0905300")# "PF3D7-0532100",
+    print(obj)
+    
+    pmap(list(gns,gn_nms, 1:length(gn_nms)), ~{
+        mplt<- do_FeaturePlot(obj, features = ..1, dims = c(1,2), pt.size = 0.6, label = F) + 
+              scale_colour_gradientn(colours = brewer.pal(n = 9, name = "Blues")[2:9])+ 
+              labs(title=..2) +
+              theme_void() +
+              theme(legend.text = element_text(size=20),
+                    legend.position="bottom",
+                    legend.title =element_blank(),
+                    plot.title = element_text(size=25, hjust = 0.5)
+              )+
+              # coord_fixed()+
+        guides(color = guide_colorbar(barwidth = 7, barheight =0.6))
+        
+      print(..3)
+      print(mplt)
+      # k_markrs_plt[[..3]] = mplt
+      return(mplt)
+
+        
+      })
+   
+  })
+
+flatten(markrs_plt)
+```
+
+
+#### Other published markers laura bartille et al {.tabset}
+##### Average expression visualization {.tabset}
+```{r, results='asis', message=FALSE}
+# msc_qcd_anotd[1:4] <- map(msc_qcd_anotd[1:4], ~SetIdent(., value='stageHL'))
+# msc_qcd_anotd[1:4]  %>% 
+msc_qcd_anotd_marker_exp <- map(msc_qcd_anotd_marker_exp, ~SetIdent(., value='stageHL'))
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    cat('Average gametocyte markers expression \n')
+    cat('\n')
+    print(FeaturePlot(., features = "lb_gam_m", dims = c(1,2), pt.size = 1.5, label = T, label.size = 5, repel = T) + 
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+ 
+            theme(axis.text=element_text(size=12), 
+                  axis.title=element_text(size=12,face="bold"), 
+                  legend.text = element_text(size=12),
+                  legend.position="bottom",
+                  legend.key.width = unit(1, "cm")
+            )+
+            coord_fixed()
+    )
+    
+    cat('\n')
+    
+    cat('Average asexual markers expression \n')
+    cat('\n')
+    print(FeaturePlot(., features = "lb_asx_m", dims = c(1,2), pt.size = 1, label = T, label.size = 5, repel = T) + 
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+ 
+            theme(axis.text=element_text(size=12), 
+                  axis.title=element_text(size=12,face="bold"), 
+                  legend.text = element_text(size=12),
+                  legend.position="bottom",
+                  legend.key.width = unit(1, "cm")
+            )+
+            coord_fixed() 
+    )
+    # export::graph2ppt(file= paste0('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/markers/kes_asx_gam_gold/asx_', .y))
+    cat("\n")
+    cat("\n")
+  })
+
+```
+
+
+##### Dotplot visualization {.tabset}
+```{r, results='asis', message=FALSE, warning=FALSE, fig.width=11, fig.height=9}
+markr_dp_theme <- theme(axis.text.x = element_text(angle = 90, size = 15),
+                  axis.text.y = element_text( size = 15),
+                  legend.text = element_text(size = 15))
+
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    cat(' \n Average gametocyte markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = lora_batille_egam_asex %>% filter(Direction == 'egam') %>% pull(Gene_id), group.by = 'stageHL') +
+            scale_x_discrete(labels= lora_batille_egam_asex %>% filter(Direction == 'egam') %>% pull(Product)%>% rev())+
+            scale_fill_continuous(name = "Avg. Expression", guide = guide_colorbar(title.position = "top", title.hjust = 0.5, 
+                                                                                   # barwidth=8, barheight=1, 
+                                                                                   frame.colour ="grey50", ticks.colour = "white"))+
+            new_scale_fill() +
+            geom_tile(data = data.frame(Stage = levels(droplevels(factor(.@meta.data$stageHL, levels = stg_refnd_lvls)))), inherit.aes = F, aes(x=0, y=Stage, fill =Stage)) + 
+            markr_dp_theme+
+            theme(axis.text.y = element_blank(),
+                  legend.title = element_text(size = 12, face = 'bold'),
+                  legend.position = "bottom")+
+            scale_fill_manual(values = sp_fld_colors, name = "Stage", guide = guide_legend(nrow = 2,  title.position = "top"))
+    )
+    # cat('\n')
+    # cat('\n')
+    
+    cat(' \n Average asexual markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = lora_batille_egam_asex %>% filter(Direction == 'asex') %>% pull(Gene_id), group.by = 'stageHL', cluster.idents = T) + 
+            scale_x_discrete(labels= lora_batille_egam_asex %>% filter(Direction == 'asex') %>% pull(Product)%>% rev())+ 
+            markr_dp_theme)
+    cat("\n")
+    cat("\n")
+  })
+
+```
+
+#### Other published markers 
+vanDjirk_portugal et al
+contains
+poran early gam
+jeninga early gam
+
+```{r, message=FALSE}
+##vanDirjk markers
+gam_lo_hi_markers <- readxl::read_xlsx('data/raw/published_lit/vanDjirk_portugal_gam_2022/vanDijk Sup table 1.xlsx', skip = 9, .name_repair = 'universal') %>% rename_all(., ~str_replace_all(., '\\.\\.*\\.', '_'))
+egam <- gam_lo_hi_markers %>% filter(Early.Late == 'TRUE (early)' & str_detect(Plasmo_DB.ID, 'PF3D7')) %>% pull(Plasmo_DB.ID) %>% str_replace(.,'_','-')
+lgam <- gam_lo_hi_markers %>% filter(Early.Late == 'TRUE (late)' & str_detect(Plasmo_DB.ID, 'PF3D7')) %>% pull(Plasmo_DB.ID) %>% str_replace(.,'_','-')
+
+poran_egam <- gam_lo_hi_markers %>% filter(Poran_et.al. == 'early' & str_detect(Plasmo_DB.ID, 'PF3D7')) %>% pull(Plasmo_DB.ID) %>% str_replace(.,'_','-')
+poran_lgam <- gam_lo_hi_markers %>% filter(Poran_et.al. == 'late' & str_detect(Plasmo_DB.ID, 'PF3D7')) %>% pull(Plasmo_DB.ID) %>% str_replace(.,'_','-')
+
+jen_egam <- gam_lo_hi_markers %>% filter(Jeninga.et.al_unpublished == 'early' & str_detect(Plasmo_DB.ID, 'PF3D7')) %>% pull(Plasmo_DB.ID) %>% str_replace(.,'_','-')
+jen_efgam <- gam_lo_hi_markers %>% filter(Jeninga.et.al_unpublished == 'early female' & str_detect(Plasmo_DB.ID, 'PF3D7')) %>% pull(Plasmo_DB.ID) %>% str_replace(.,'_','-')
+jen_emgam <- gam_lo_hi_markers %>% filter(Jeninga.et.al_unpublished == 'early male' & str_detect(Plasmo_DB.ID, 'PF3D7')) %>% pull(Plasmo_DB.ID) %>% str_replace(.,'_','-')
+```
+
+#### vanDjirk_portugal et al published markers {.tabset}
+```{r}
+##MT-gns avg expression
+
+egam_exp <- msc_qcd_anotd_marker_exp %>%
+  map(~makeSetScore(.x, gene.set = egam, slt = 'data', assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('egam_markers') 
+  )
+lgam_exp <- msc_qcd_anotd_marker_exp %>%
+  map(~makeSetScore(.x, gene.set = lgam, slt = 'data', assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('lgam_markers') 
+  )
+
+msc_qcd_anotd_marker_exp <- list(msc_qcd_anotd_marker_exp, egam_exp, lgam_exp) %>%
+  pmap(~AddMetaData(..1, ..2) %>%
+         AddMetaData(., ..3))
+```
+
+##### Average expression visualization {.tabset}
+```{r, results='asis', message=FALSE, warning=FALSE}
+# cat('## Visualize field parasites {.tabset}   \n')
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    p <- FeaturePlot(., features = "egam_markers", dims = c(1,2)) + scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+ 
+      umap_theme
+      
+    print(p)
+    
+    p <- FeaturePlot(., features = "lgam_markers", dims = c(1,2)) + scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+ 
+      umap_theme
+
+    print(p)
+    cat('\n ')
+    cat("\n")
+  })
+
+```
+
+
+##### Dotplot visualization {.tabset}
+plotting 1:30
+```{r, results='asis', message=FALSE, warning=FALSE, fig.width=12, fig.height=6}
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    cat(' \n Average early gametocyte markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = egam[1:50], group.by = 'stageHL', assay = 'RNA', cluster.idents = T)  + 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% egam[1:50]) %>% pull(Gene)%>% rev()) + 
+            markr_dp_theme
+    )
+    # cat('\n')
+    # cat('\n')
+    
+    cat(' \n Average late gam markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = lgam[1:50], group.by = 'stageHL', assay = 'RNA', cluster.idents = T) + 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% lgam[1:50]) %>% pull(Gene)%>% rev())+ 
+            markr_dp_theme
+    )
+    cat("\n")
+    cat("\n")
+  })
+
+```
+
+#### Poran dotplot visualization {.tabset}
+poran early and late
+```{r, results='asis', message=FALSE, warning=FALSE, fig.width=10, fig.height=6}
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('##### ',.y,'   \n')
+    cat(' \n Expression across clusters of poran early gam markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = poran_egam, group.by = 'stageHL', assay = 'RNA', cluster.idents = T)  + 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% poran_egam) %>% pull(Gene)%>% rev())+ 
+            markr_dp_theme)
+    # cat('\n')
+    # cat('\n')
+    
+    cat(' \n Expression across clusters of Poran late gam markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = poran_lgam, group.by = 'stageHL', assay = 'RNA', cluster.idents = T) + 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% poran_lgam) %>% pull(Gene)%>% rev())+ 
+            markr_dp_theme)
+    cat("\n")
+    cat("\n")
+  })
+
+```
+
+#### Jeninga dotplot visualization {.tabset}
+jeninga early, early female and early male
+```{r, results='asis', message=FALSE, warning=FALSE, fig.width=14, fig.height=7}
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('##### ',.y,'   \n')
+    cat(' \n Expression across clusters of Jeninga early gam markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = jen_egam, group.by = 'stageHL', assay = 'RNA', cluster.idents = T)  + 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% jen_egam) %>% pull(Gene)%>% rev())+ 
+            markr_dp_theme)
+    # cat('\n')
+    # cat('\n')
+    
+    cat(' \n Expression across clusters of Jeninga early female markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = jen_efgam, group.by = 'stageHL', assay = 'RNA', cluster.idents = T)+ 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% jen_efgam) %>% pull(Gene)%>% rev())+ 
+            markr_dp_theme)
+    # cat('\n')
+    # cat('\n')
+    
+    cat(' \n Expression across clusters of Jeninga early male markers expression \n')
+    # cat('\n')
+    print(do_DotPlot(., features = jen_emgam[1:50], group.by = 'stageHL', assay = 'RNA', cluster.idents = T) + 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% jen_emgam[1:50]) %>% pull(Gene)%>% rev())+ 
+            markr_dp_theme)
+    cat("\n")
+    cat("\n")
+  })
+
+```
+
+
+#### Expression of 10 female markers in MSC advised by sunil {.tabset}
+PF3D7_1475500	CCp1 PF3D7_1455800	CCp2 PF3D7_1407000	CCp3 PF3D7_0903800	CCp4 PF3D7_1250100	G377 PF3D7_0621400	ALV7 PF3D7_0825700	CryPH PF3D7_1302100	G27/25 PF3D7_0209000	P230 PF3D7_0208900	P230p PF3D7_1031000	P25 PF3D7_0518800	PSOP13 PF3D7_0715400	PSOP20 PF3D7_0630200	PSOP6
+
+```{r, message=FALSE}
+f_mk_gns <- c('PF3D7_1475500', 'PF3D7_1455800', 'PF3D7_1407000', 'PF3D7_0903800', 'PF3D7_1250100', 'PF3D7_0621400', 'PF3D7_0825700', 'PF3D7_1302100', 'PF3D7_0209000', 'PF3D7_0208900', 'PF3D7_1031000', 'PF3D7_0518800', 'PF3D7_0715400', 'PF3D7_0630200') %>% str_replace(., '_', '-')
+```
+
+##### Average expression  {.tabset}
+```{r}
+
+f_mk_avg_exp <- msc_qcd_anotd_marker_exp %>%
+  map(~makeSetScore(., f_mk_gns, assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('f_mk_avg') 
+  )
+
+msc_qcd_anotd_marker_exp <- list(msc_qcd_anotd_marker_exp, f_mk_avg_exp) %>%
+  pmap(~AddMetaData(..1, ..2))
+```
+
+
+```{r, results='asis', message=FALSE}
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    p <- FeaturePlot(., features = "f_mk_avg", dims = c(1,2)) + scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))
+    print(p)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+##### Dotplot visualization {.tabset}
+```{r, results='asis', message=FALSE, warning=FALSE, fig.width=12, fig.height=4}
+msc_qcd_anotd_marker_exp  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    cat(' \n Average gametocyte markers expression \n')
+    # cat('\n')
+    print(DotPlot(., features = f_mk_gns, group.by = 'stageHL') + 
+            theme(axis.text.x = element_text(angle = 90, size = 15),
+                  axis.text.y = element_text( size = 15),
+                  legend.text = element_text(size = 15)) + 
+            scale_x_discrete(labels= Pf3D7_genes_plasmoDB %>% filter(gene_id %in% f_mk_gns) %>% pull(Gene)))
+    cat('\n')
+    cat('\n')
+    
+  })
+
+```
+
+### Save annotated object as QC is satisfactory
+These objects are used in downstream analyses as shown in other notebooks
+```{r}
+# saveRDS(msc_qcd_anotd, 'data/processed/msc14/5736STDY11771546_DB52e_star/msc_qcd_anotd.RDS')
+
+# # saveRDS(msc_qcd_anotd_stgstrqc[[1]], 'data/processed/msc14/5736STDY11771546_DB52e_star/msc14_qcd_annotated.RDS')
+```
+
+
+```{r}
+msc_qcd_anotd_marker_exp <- msc_qcd_anotd_marker_exp %>%
+  map(. %>% SetIdent(., value = "stageHL"))
+```
+
+
+### MSCs Violin plot of gene/transcript count grouped by stageHL n seurat clusters {.tabset}
+
+```{r, results='asis'}
+  purrr::imap(msc_qcd_anotd_marker_exp,  ~ {
+    # create tabset for each group
+    cat('####', .y, '   \n')
+    
+    cat('nfeature \n')
+    a_gns = VlnPlot(.x, features = c("nFeature_RNA"), group.by = 'stageHL', ncol = 5, cols = sp_fld_colors) +
+      theme(axis.text=element_text(size=14), 
+            legend.position="none", 
+            title = element_text(size=16,face="bold")) +
+      labs(x='Stage', y = 'Number of genes\n detected', title = 'Genes per cell')
+    
+    print(a_gns)
+    cat('\n')
+    
+    b_gns = VlnPlot(., features = c("nCount_RNA", "nFeature_RNA"), group.by = 'seurat_clusters')
+    print(b_gns)
+    
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+### MSCs UMAP coloured by stageHL {.tabset}
+
+```{r, results='asis'}
+
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.5, "cm")
+)
+
+m14_umap <- list(msc_qcd_anotd_marker_exp, sample_id_lst[1:4])  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    cat('nfeature \n')
+    p = DimPlot(., reduction = "umap", group.by = 'stageHL', 
+                cols = sp_fld_colors , pt.size = 1,  label = T, repel = T, label.size = 6 ,
+                ) +
+      theme(axis.text=element_blank(), 
+            axis.title=element_blank(),
+            plot.title = element_blank(),
+            aspect.ratio = 1/1,
+            ) + 
+    guides(colour = F,
+         x= trunc_axis,
+         y= trunc_axis)+
+  theme(axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed")),
+        axis.title = element_text(hjust = 0,size=14, face = 'bold'))+
+  scale_x_continuous(breaks = NULL) +
+  scale_y_continuous(breaks = NULL)
+    
+    print(p)
+    return(p)
+    
+    cat('\n')
+    cat("\n")
+  })
+
+
+
+```
+
+## More visualizations
+### MSCs UMAP coloured by StageMCA {.tabset}
+```{r, results='asis'}
+list(msc_qcd_anotd_marker_exp, sample_id_lst[1:4])  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    cat('nfeature \n')
+    p = DimPlot(., reduction = "umap", group.by = 'StageMCA', 
+                cols = sp_fld_colors ,  pt.size = 1.2,  label = T, repel = T, label.size = 4 ) +
+      labs(title = 'Stage') +
+      theme(axis.text=element_text(size=18),
+            axis.title=element_text(size=24,face="bold"),
+            title = element_text(size=24,face="bold"),
+            legend.text = element_blank())+
+      guides(colour = guide_legend(nrow = 4))
+    
+    print(p)
+    
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+
+### MSC14 UMAP coloured by stageHL split by strain vertical {.tabset}
+
+```{r, fig.width = 14, fig.height = 6}
+umap2_theme <- theme(axis.text=element_text(size=18), 
+            axis.title=element_text(size=20,face="bold"), 
+            plot.title = element_blank(),
+            # strip.text.x = element_text(size = 24, face = "bold"), 
+            legend.text = element_text(size=20), 
+            legend.title = element_text(size=20,face="bold"))
+
+DimPlot(msc_qcd_anotd[[4]], reduction = "umap",  split.by = 'Strain_DN', group.by = 'stageHL', 
+        cols = sp_fld_colors, pt.size = 2.5, ncol=4)  +
+  umap2_theme + 
+      guides(color = guide_legend(override.aes = list(size = 3.5)))
+```
+
+### MSCs UMAP coloured by stageHL split by strain horizontal {.tabset}
+```{r, results='asis', fig.width = 15, fig.height = 5}
+list(msc_qcd_anotd_marker_exp, sample_id_lst[1:4])  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    cat('nfeature \n')
+    p = DimPlot(., reduction = "umap",  split.by = 'Strain_DN', group.by = 'stageHL', 
+                cols = sp_fld_colors, pt.size = 3) +
+      umap2_theme
+    
+    print(p)
+    
+    cat('\n')
+    cat("\n")
+  })
+
+```
