@@ -1,0 +1,2068 @@
+---
+title: "MSC DE field VS lab strain VS strain DE"
+date: '2022-08-08'
+author: 'Jesse Rop'
+output: 
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+---
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr) 
+  library(stringr)
+  library(purrr)
+  library(readr)
+  library(tibble)
+  library(ggplot2)
+  library(tidyr)
+  library(cowplot)
+  library(SeuratData)
+  library(SeuratDisk)
+  library(pheatmap)
+  library(plotly)
+  library(rmarkdown)
+  library(RColorBrewer)
+  library(MAST)
+  library(EnhancedVolcano)
+  # library(org.Pf.plasmo.db)
+  library(clusterProfiler) ##github installation newest version https://github.com/YuLab-SMU/clusterProfiler/issues/434#issuecomment-1048633162 remotes::install_github(c("YuLab-SMU/DOSE", "YuLab-SMU/clusterProfiler", "YuLab-SMU/enrichplot" ))
+  library(Platypus)
+  library(ggvenn)
+  library(tradeSeq)
+  library(MetBrewer)
+  library(ComplexHeatmap)
+  library(fgsea)
+  library(msigdbr)
+  library(slingshot)
+  library(enrichplot)
+  library(chromoMap)
+  library(pdftools)
+  library(SCpubr)
+  library(GGally)
+  library(circlize)
+  library(readxl)
+  library("ggVennDiagram")
+  library(UpSetR)
+  library(ComplexUpset)
+  library(openxlsx)
+  library(ggpubr)
+  library(randomcoloR)
+  # library(ggpairs)
+  library(conflicted)
+  conflict_prefer("map", "purrr")
+  conflict_prefer("filter", "dplyr")
+  conflict_prefer("rename", "dplyr")
+  conflict_prefer("count", "dplyr")
+  conflicts_prefer(SingleCellExperiment::colData)
+})
+```
+
+# DE within MSC14 field parasites and DE on MSC14 VS MCA V3 parasites
+
+## Variable declarations, read in input files and exploratory visualizations
+
+```{r setup}
+##Set working directory
+knitr::opts_knit$set(root.dir = '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali')
+```
+
+```{r}
+##Assign colour variables for the different plots
+
+
+
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   ## 'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   'Female'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   ## 'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Male'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle'
+)
+
+##Field colours
+fvl_cols <- c('Field' ='#aea677',
+              'Lab' = "#e7f1f9") #"#ffe48d"
+
+strain_cols_n <-c("#910000", "#ff1a8d", "#007c71", "#0ea300", "#00deca", "#9a96c7", "#5d57a4", "#a8875b", "#ffd18d", "#b4d2ff", "#cdb8c5", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","thistle","#a40000" , "#00b7a7", "#e7f1f9", 'black', 'grey')
+#, 'lavender', 'lightgray', 'grey'
+names(strain_cols_n) <- c('SC2', 'SC1','SC5',  'SC4', 'SC3',  'SC6', 'SC7', 'SC8', '7G8', 'NF54','NF54_A', 'S2_b', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'SC1_3i','Negative', 'Lab', 'Less5', NA)
+
+#00BFFF n #E0115F -- Good blue colour to use somewhere
+
+##Strain colours
+# dset_cols <- c('Lab' ="#a9cee8",
+dset_cols <- c('Lab' ="#e7f1f9",
+               'Field' = "#aea677") # selected as mix of strain colours https://artincontext.org/color-mixer/
+
+# strain_cols <- c(met.brewer(name = 'Austria')[c(1,7, 4,6)], 'light gray')
+# # names(strain_cols) = c('Strain 0', 'Strain 1', 'Strain 2', 'Doublet', 'Negative')
+# names(strain_cols) = c('G1', 'G2', 'G3', 'Doublet', 'Negative')
+fld_strns = paste0('SC', 1:8)
+strain_dset_lvls = c( fld_strns, 'NF54', '7G8', 'NF54_A', 'Field', 'Lab', 'Doublet')
+sample_id_lst <-as.list(c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" ) %>% 
+                          str_sort(., numeric = T))
+
+strain_dset_lvls_m = paste(rep(str_remove(sample_id_lst[1:4], "SC"), each=length(fld_strns)), fld_strns, sep = '_')
+strain_dset_lvls_don = c(strain_dset_lvls_m, strain_dset_lvls)
+strain_dset_lvls_don_col = randomcoloR::distinctColorPalette(k = length(strain_dset_lvls_m)) %>% set_names(strain_dset_lvls_m) %>% c(., strain_cols_n)
+
+```
+
+
+
+```{r, message=FALSE}
+##Metadata from all p.falciparum genes downloaded from plasmoDB
+Pf3D7_genes_plasmoDB <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3d7_Genes_Summary_270922.csv") %>% 
+  dplyr::rename("gene_id" = `Gene ID` ) %>% 
+  group_by(gene_id) %>% 
+  add_count(name='gn_iso') %>% 
+  ungroup() %>%
+  mutate(across(gene_id, ~case_when(gn_iso>1 ~ source_id,
+                                    TRUE ~ as.character(.)))) %>% 
+  mutate(across(gene_id, ~str_replace(.,"_", "-")))%>%
+  dplyr::rename('Gene_name' = `Gene Name or Symbol`, 'Ka_Ks' = `NonSyn/Syn SNP Ratio All Strains`, 'TM_domains'=`# TM Domains`) %>% 
+  mutate(across(where(is.character), ~na_if(., "N/A")),
+         Gene = coalesce(`Gene_name`, gene_id)
+  )  %>%
+  group_by(Gene) %>% 
+  add_count() %>% 
+  ungroup() %>%
+  mutate(across(Gene, ~case_when(n>1 ~ paste0(.,'_', gene_id),
+                                 TRUE ~ as.character(.)))) 
+
+```
+
+
+```{r}
+##Integrated seurat object
+# msc_y21_mca_mf<-readRDS("data/processed/msc14_v3_combi.RDS")
+# msc14_v3_combi_sce_seu<- readRDS("data/processed/msc14_v3_combi_sce.RDS")
+# msc_y21_mca_mf <- readRDS("data/processed/msc_y21_mca_mf.RDS")
+# msc_y21_mca_mf_sce <- readRDS("data/processed/msc_y21_mca_mf_sce.RDS")
+
+msc_gam_combi_noLE_de <- readRDS("data/processed/DB52e_star/msc_gam_combi_noLE.RDS")
+msc_gam_combi_noLE_sce_de <- readRDS("data/processed/DB52e_star/msc_gam_combi_noLE_sce.RDS")
+msc_gam_combi_noLE_de <- list(msc_gam_combi_noLE_de)
+msc_gam_combi_noLE_sce_de <- list(msc_gam_combi_noLE_sce_de)
+
+## generate metadata in preparaion for DE
+nw_mdata <- list(msc_gam_combi_noLE_de) %>% 
+  pmap(., ~{
+    ..1@meta.data %>% 
+    mutate( dset = case_when(str_detect(orig.ident, "MSC") ~ "Field", str_detect(orig.ident, "D") ~ "Lab"),
+            strain = case_when(str_detect(orig.ident, "MSC") ~ paste0(str_replace(str_remove_all(orig.ident, "SC|mrna"), "\\.", "_"), Strain_DN)),
+            strain_dset = droplevels(factor(coalesce(strain, dset), levels= strain_dset_lvls_don)),
+            across(dset, ~factor(., levels = c( "Field", "Lab"))),
+            lf_strain = case_when(strain_lab2 == 'NF54_SetA' & orig.ident %in% c('D0', 'D3', 'D5', 'D10a') ~ 'NF54_A', str_detect(orig.ident, "MSC") ~ Strain_DN, T ~ strain_lab2),
+            across(lf_strain, ~droplevels(factor(., levels = strain_dset_lvls_don))),
+            # stage_asx_c = case_when(stageHL %in% c('Late ring', 'Early trophozoite') ~ 'Asexual', dset == 'Lab' ~ 'MCA V3 Lab', T ~ stageHL)) %>%
+            stage_asx_c = case_when(StageMCA %in% c('Late ring', 'Early trophozoite') ~ 'Asexual', dset == 'Lab' ~ 'MCA V3 Lab', T ~ StageMCA)) %>%
+dplyr::select(dset, strain, strain_dset, lf_strain, stage_asx_c) 
+
+  })
+
+##SEURAT
+msc_gam_combi_noLE_de <- map2(msc_gam_combi_noLE_de,nw_mdata, ~AddMetaData(.x, .y))
+
+##SCE
+msc_gam_combi_noLE_sce_de[[1]]@colData[,c('dset', 'strain', 'strain_dset', 'lf_strain', 'stage_asx_c')] <- nw_mdata[[1]][colnames(msc_gam_combi_noLE_sce_de[[1]]),]
+# msc_gam_combi_noLE_sce_de[[2]]@colData[,c('dset', 'strain', 'strain_dset', 'lf_strain', 'stage_asx_c')] <- nw_mdata[[2]][colnames(msc_gam_combi_noLE_sce_de[[2]]),]
+
+
+```
+
+
+```{r}
+##Integrated seurat object
+# msc_gam_combi_noLE_de <- msc_gam_combi_noLE_de
+# write_csv(msc_gam_combi_noLE_de@meta.data, "data/processed/msc_gam_combi_noLE_sk21_mdata.csv")
+
+```
+
+### Retain only strain_qcd parasites
+```{r, eval=F}
+##Subset to original sce object to retain only those with strain_qcd   
+# msc14_v3_combi_sce_seu_strainqcd <- msc14_v3_combi_sce_seu[,msc14_v3_combi_sce_seu@colData[,c('strain_qcd', 'dset')] %>% data.frame() %>% 
+#                                                        filter(!is.na(strain_qcd) | dset == 'Lab' ) %>% 
+#                                                        rownames()]
+# 
+# dim(msc14_v3_combi_sce_seu)
+# dim(msc14_v3_combi_sce_seu_strainqcd)
+
+```
+
+```{r}
+##Field datasets (msc1,3,13,14,1272C)
+# sample_id_lst <-as.list(c("msc1", "MSC3", "msc13", "msc14" ) %>% 
+#                           str_sort(., numeric = T))
+# sample_id_lst <-sample_id_lst[4]
+# # msc_m21_qcd_anotd_strn <- readRDS('data/processed/msc_m21_qcd_anotd_strn.RDS') %>% 
+# #   set_names(sample_id_lst)
+# msc_m21_qcd_anotd_strn<- readRDS("data/processed/msc_m21_qcd_anotd_strn.RDS")
+# names(msc_m21_qcd_anotd_strn) <- str_remove(names(msc_m21_qcd_anotd_strn), "_.")
+
+
+```
+
+### Exploratory Visualization
+#### Field parasites UMAP split by strain {.tabset}
+```{r, results='asis', message=FALSE, warning=FALSE, fig.height=4, fig.width=18}
+# cat('## Visualize field parasites {.tabset}   \n')
+# msc_m21_qcd_anotd_strn[1:4]
+# msc_m21_qcd_anotd_strn  %>% 
+#   purrr::iwalk(.,~{
+#     # create tabset for each group 
+#     cat('##### ',.y,'   \n')
+#     p <- DimPlot(.x, reduction = "umap",  split.by = 'strain', group.by = 'stageHL', 
+#                  cols = sp_fld_colors, pt.size = 1)  + 
+#       theme(axis.text=element_text(size=18), 
+#             axis.title=element_text(size=20,face="bold"), 
+#             # legend.text = element_blank(), 
+#             plot.title = element_blank(),
+#             strip.text.x = element_text(size = 24, face = "bold") )
+#     print(p)
+#     cat('\n  ')
+#     cat("\n")
+#   })
+
+```
+
+## Trajectory inference of field and lab overlapping cells & subsampling b4 tradeseq DE 
+
+### Preprocess
+```{r, fig.width = 32, fig.height = 7}
+
+DefaultAssay(msc_gam_combi_noLE_de[[1]]) <- "integrated"
+# DefaultAssay(msc_gam_combi_noLE_de[[1]]) <- "integrated"
+
+# msc_gam_combi_noLE_de <- map(msc_gam_combi_noLE_de, ~FindClusters(.,resolution = 0.8, verbose = F))
+```
+
+#### Visualize umap and field cells dimension 1 and 2 n dimension 2 and 3 {.tabset}
+```{r, results='asis'}
+## Ploting truncated umap axis
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.2, "cm")
+)
+
+
+fld_lab_umaps <- list()
+
+dims_c <- combn(c(1:3), m=2, simplify = F)
+
+for(i in 1:length(dims_c)) {
+  
+  cat('##### dim', dims_c[[i]],'  \n')
+  map(msc_gam_combi_noLE_de, ~DimPlot(.x, reduction = "pca", pt.size = 0.5, dims = dims_c[[i]], label = T) %>% print())
+  
+   ##Save plot for cowplot grouping 
+  fld_lab_umaps[[i]] <- map(msc_gam_combi_noLE_de, ~{
+    .x[['pca']]@cell.embeddings[,dims_c[[i]]] %>% 
+      data.frame() %>% 
+      rownames_to_column('cell_bc') %>% 
+      left_join(., .x@meta.data %>% 
+                  dplyr::select(dset, strain_dset) %>% 
+                  rownames_to_column('cell_bc'), by = 'cell_bc') %>% 
+      mutate(across(dset, ~factor(., levels = c('Lab', 'Field')))) %>% 
+      arrange(dset)%>% 
+      ggplot(aes_string(x = paste0('PC_', dims_c[[i]][1]), y =paste0('PC_', dims_c[[i]][2]), color = 'dset'))  + scale_color_manual(name = 'Conditions', values = dset_cols)+ geom_point(size=0.4) +
+      theme_classic()+ 
+      theme(#axis.text=element_text(size=20), 
+        # axis.title=element_text(size=18,face="bold"),
+        axis.text=element_blank(), 
+        axis.title=element_blank(),
+        legend.text = element_text(size = 20) ,
+        legend.title = element_text(size = 18, face = "bold") )+ 
+      guides(colour = guide_legend(override.aes = list(size=4.5)),
+         x= trunc_axis,
+         y= trunc_axis)+
+  theme(axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed")),
+        axis.title = element_text(hjust = 0))+
+  scale_x_continuous(breaks = NULL) +
+  scale_y_continuous(breaks = NULL)
+  })
+
+map(fld_lab_umaps[[i]], print)
+    
+  cat('\n')
+  cat('\n')
+}
+
+
+
+```
+
+
+### AUTO-SUBSETING
+### Calculate pseudotime chunks with more than 10
+```{r}
+# ##Get pseudotime cut-offs for the different field stages so as to subset the bits of UMAP containing field cells 
+# names(msc_gam_combi_noLE_sce_de[[1]]@colData)[names(msc_gam_combi_noLE_sce_de[[1]]@colData) == 'slingPseudotime_1'] <- 'female_pt'
+# names(msc_gam_combi_noLE_sce_de[[1]]@colData)[names(msc_gam_combi_noLE_sce_de[[1]]@colData) == 'slingPseudotime_2'] <- 'male_pt'
+# 
+# 
+# ##separate donors
+# msc_gam_combi_noLEd_sce <- map2(rep(msc_gam_combi_noLE_sce_de, 4), rep(sample_id_lst[1:4], each =2), ~.x[,str_detect(.x@colData$orig.ident, "D") | .x@colData$orig.ident == paste0(.y,".mrna")]) %>% set_names(paste(rep(sample_id_lst[1:4], each =2), rep(c('f','m'), 4), sep = "_"))
+# 
+# pt_cutoffs <- pmap(list(msc_gam_combi_noLEd_sce, rep(c('female_pt', 'male_pt'), 4)), ~{
+#   ..1@colData[, c('stageHL', 'stage_asx_c', ..2)] %>% data.frame() %>% rownames_to_column('bcode') %>% group_by(stage_asx_c) %>% 
+#     mutate(min_pt = min(!!rlang::sym(..2)), max_pt = max(!!rlang::sym(..2)), ci015 = quantile(!!rlang::sym(..2), 0.015, na.rm = T), ci985 = quantile(!!rlang::sym(..2), 0.985, na.rm = T)) %>% ungroup()
+# })
+# 
+# ##get pseudotime upper and lower CIs
+# uci <- map2(rep(pt_cutoffs, each =2), rep(c('Female (HE)', 'Female (LE)', 'Male (HE)', 'Male (LE)'), 4), ~.x %>% filter(stage_asx_c ==.y) %>% pull(ci985) %>% unique())
+# lci <- map2(rep(pt_cutoffs, each =2), rep(c('Female (HE)', 'Female (LE)', 'Male (HE)', 'Male (LE)'), 4), ~.x %>% filter(stage_asx_c ==.y) %>% pull(ci015) %>% unique())
+# 
+# 
+# 
+# ##Subset field and lab cells using pseudotime CIs above
+# 
+# msc_y21_sub_mf_sce_unbal_auto_ci <- list(rep(msc_gam_combi_noLEd_sce, each =2), 
+#                                          rep(pt_cutoffs, each =2), 
+#                                          rep(c('Female (HE)', 'Female (LE)', 'Male (HE)', 'Male (LE)'), 4), 
+#                                          lci, 
+#                                          uci, 
+#                                          rep(rep(c('female_pt', 'male_pt'), 4), each=2),
+#                                          rep(c(rep("",3),"MCA V3 Lab"), each=4) ##remove lab from msc 1,3,13
+#                                          ) %>% 
+#   pmap(.,~{
+#   ..1[,..2 %>% filter((stage_asx_c == ..3 | stage_asx_c ==..7) & !!rlang::sym(..6) >= ..4 & !!rlang::sym(..6) <= ..5) %>% pull(bcode)]
+# }) %>% 
+#   set_names(paste0(rep(names(msc_gam_combi_noLEd_sce), each =2), rep(c("he","le"), 8)))
+# 
+# 
+# for(i in 1:length(msc_y21_sub_mf_sce_unbal_auto_ci)){
+#   msc_y21_sub_mf_sce_unbal_auto_ci[[i]]@colData[,"lf_strain"] <- msc_y21_sub_mf_sce_unbal_auto_ci[[i]]@colData[,c("lf_strain", "strain")] %>% as.data.frame() %>% mutate(across(lf_strain, ~droplevels(.))) %>% select(lf_strain)
+# 
+# }
+# 
+
+```
+
+```{r, fig.width = 32, fig.height = 7}
+
+msc_gam_combi_noLE_de[[1]]@meta.data %>% filter(orig.ident == "MSC14.mrna") %>% count(orig.ident, stageHL, Strain_DN)
+
+```
+
+Here we get the donor strains within each donor and the overlapping lab strains - retain 0.15 & 98.5 quartiles
+Remove NF54_A since we only wanted to include this for assessing batch effect by looking and NF54 DE across different batches
+```{r}
+##Get pseudotime cut-offs for the different field stages so as to subset the bits of UMAP containing field cells 
+names(msc_gam_combi_noLE_sce_de[[1]]@colData)[names(msc_gam_combi_noLE_sce_de[[1]]@colData) == 'slingPseudotime_1'] <- 'female_pt'
+names(msc_gam_combi_noLE_sce_de[[1]]@colData)[names(msc_gam_combi_noLE_sce_de[[1]]@colData) == 'slingPseudotime_2'] <- 'male_pt'
+
+
+##separate donors - subset the object getting each donor cells and field
+msc_gam_combi_noLEd_sce <- map2(rep(msc_gam_combi_noLE_sce_de, 8), rep(sample_id_lst[1:4], each =2), ~.x[,str_detect(.x@colData$orig.ident, "D") | .x@colData$orig.ident == paste0(.y,".mrna")]) %>% set_names(paste(rep(sample_id_lst[1:4], each =2), rep(c('f','m'), 4), sep = "_"))
+
+pt_cutoffs <- pmap(list(msc_gam_combi_noLEd_sce, rep(c('female_pt', 'male_pt'), 4)), ~{
+  ..1@colData[, c('stageHL', 'stage_asx_c', 'lf_strain', ..2)] %>% data.frame() %>% rownames_to_column('bcode') %>% group_by(stage_asx_c) %>% 
+    mutate(min_pt = min(!!rlang::sym(..2)), max_pt = max(!!rlang::sym(..2)), ci015 = quantile(!!rlang::sym(..2), 0.015, na.rm = T), ci985 = quantile(!!rlang::sym(..2), 0.985, na.rm = T)) %>% ungroup()
+})
+
+##get pseudotime upper and lower CIs
+uci <- map2(rep(pt_cutoffs), rep(c('Gametocyte (female)', 'Gametocyte (male)'), 4), ~.x %>% filter(stage_asx_c ==.y) %>% pull(ci985) %>% unique())
+lci <- map2(rep(pt_cutoffs), rep(c('Gametocyte (female)', 'Gametocyte (male)'), 4), ~.x %>% filter(stage_asx_c ==.y) %>% pull(ci015) %>% unique())
+
+
+##Subset field and lab cells using pseudotime CIs above
+msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci <- list(rep(msc_gam_combi_noLEd_sce), 
+                                         rep(pt_cutoffs), 
+                                         rep(c('Gametocyte (female)', 'Gametocyte (male)'), 4), 
+                                         lci, 
+                                         uci, 
+                                         rep(c('female_pt', 'male_pt'), 4),
+                                         rep(c("MCA V3 Lab"), 8)
+                                         # rep(c(rep("",3),"MCA V3 Lab"), each=2) ##remove lab from msc 1,3,13
+                                         ) %>% 
+  ## !! Remove NF54_A since we only wanted to include this for assessing batch effect by looking and nf54 DE across different batches
+  pmap(.,~{
+  ..1[,..2 %>% filter((stage_asx_c == ..3 | stage_asx_c ==..7) & (lf_strain != "NF54_A") & !!rlang::sym(..6) >= ..4 & !!rlang::sym(..6) <= ..5) %>% pull(bcode)]
+}) %>% 
+  set_names(paste0(rep(names(msc_gam_combi_noLEd_sce), each =1)))
+
+
+for(i in 1:length(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci)){
+  msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci[[i]]@colData[,"lf_strain"] <- msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci[[i]]@colData[,c("lf_strain", "strain")] %>% as.data.frame() %>% mutate(across(lf_strain, ~droplevels(.))) %>% select(lf_strain)
+
+}
+
+
+```
+
+get only donor cells for all stages
+```{r}
+##Get pseudotime cut-offs for the different field stages so as to subset the bits of UMAP containing field cells 
+# names(msc_gam_combi_noLE_sce_de[[1]]@colData)[names(msc_gam_combi_noLE_sce_de[[1]]@colData) == 'slingPseudotime_1'] <- 'female_pt'
+# names(msc_gam_combi_noLE_sce_de[[1]]@colData)[names(msc_gam_combi_noLE_sce_de[[1]]@colData) == 'slingPseudotime_2'] <- 'male_pt'
+
+
+##separate donors - subset the object getting each donor cells and field
+msc_gam_combi_noLEd_sce_don <- map2(rep(msc_gam_combi_noLE_sce_de, 8), rep(sample_id_lst[1:4], each =2), ~.x[,str_detect(.x@colData$orig.ident, "D") | .x@colData$orig.ident == paste0(.y,".mrna")]) %>% set_names(paste(rep(sample_id_lst[1:4], each =2), rep(c('f','m'), 4), "don",  sep = "_"))
+
+pt_cutoffs_don <- pmap(list(msc_gam_combi_noLEd_sce_don, rep(c('female_pt', 'male_pt'), 4)), ~{
+  ..1@colData[, c('stageHL', 'stage_asx_c', 'lf_strain', ..2)] %>% data.frame() %>% rownames_to_column('bcode') %>% group_by(stage_asx_c) %>% 
+    mutate(min_pt = min(!!rlang::sym(..2)), max_pt = max(!!rlang::sym(..2)), ci015 = quantile(!!rlang::sym(..2), 0.015, na.rm = T), ci985 = quantile(!!rlang::sym(..2), 0.985, na.rm = T)) %>% ungroup()
+})
+
+##get pseudotime upper and lower CIs
+uci_don <- map2(rep(pt_cutoffs), rep(c('Gametocyte (female)', 'Gametocyte (male)'), 4), ~.x %>% filter(stage_asx_c ==.y) %>% pull(ci985) %>% unique())
+lci_don <- map2(rep(pt_cutoffs), rep(c('Gametocyte (female)', 'Gametocyte (male)'), 4), ~.x %>% filter(stage_asx_c ==.y) %>% pull(ci015) %>% unique())
+
+
+##Subset field and lab cells using pseudotime CIs above
+msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_don <- list(rep(msc_gam_combi_noLEd_sce_don), 
+                                         rep(pt_cutoffs_don), 
+                                         rep(c('Gametocyte (female)', 'Gametocyte (male)'), 4), 
+                                         lci_don, 
+                                         uci_don, 
+                                         rep(c('female_pt', 'male_pt'), 4),
+                                         rep(c("MCA V3 Lab"), 8)
+                                         # rep(c(rep("",3),"MCA V3 Lab"), each=2) ##remove lab from msc 1,3,13
+                                         ) %>% 
+  ## !! Remove NF54_A since we only wanted to include this for assessing batch effect by looking and nf54 DE across different batches
+  pmap(.,~{
+  ..1[,..2 %>% filter((stage_asx_c == ..3) & (lf_strain != "NF54_A") & !!rlang::sym(..6) >= ..4 & !!rlang::sym(..6) <= ..5) %>% pull(bcode)]
+}) %>% 
+  set_names(paste0(rep(names(msc_gam_combi_noLEd_sce_don), each =1)))
+
+
+for(i in 1:length(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_don)){
+  msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_don[[i]]@colData[,"lf_strain"] <- msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_don[[i]]@colData[,c("lf_strain", "strain")] %>% as.data.frame() %>% mutate(across(lf_strain, ~droplevels(.))) %>% select(lf_strain)
+
+}
+
+
+```
+
+##### Same as above but for nf54 versus 7g8 solely - #kuikjo
+Here we get the lab cells nf54 and 7g8 that overlap with field strains regardless of donor - retain 0.15& 98.5 quartiles
+We call these comparisons M_NF54_7G8_f for females and M_NF54_7G8_m for males
+```{r}
+##Get pseudotime cut-offs for the lab cells overlapping donor 
+lab_nms <- c("M_NF54_7G8")
+##separate 7g8 nf54 males and females overlapping donors
+msc_gam_combi_noLEd_sce_lab <- rep(msc_gam_combi_noLE_sce_de, 2) %>% set_names(paste(rep(lab_nms, each =2), c('f','m'), sep = "_"))
+
+pt_cutoffs_lab <- pmap(list(msc_gam_combi_noLEd_sce_lab, rep(c('female_pt', 'male_pt'))), ~{
+  ..1@colData[, c('stageHL', 'stage_asx_c', 'lf_strain', ..2)] %>% data.frame() %>% rownames_to_column('bcode') %>% group_by(stage_asx_c) %>% 
+    mutate(min_pt = min(!!rlang::sym(..2)), max_pt = max(!!rlang::sym(..2)), ci015 = quantile(!!rlang::sym(..2), 0.015, na.rm = T), ci985 = quantile(!!rlang::sym(..2), 0.985, na.rm = T)) %>% ungroup()
+})
+
+##get pseudotime upper and lower CIs
+uci_lab <- map2(rep(pt_cutoffs_lab), rep(c('Gametocyte (female)', 'Gametocyte (male)'), 1), ~.x %>% filter(stage_asx_c ==.y) %>% pull(ci985) %>% unique())
+lci_lab <- map2(rep(pt_cutoffs_lab), rep(c('Gametocyte (female)', 'Gametocyte (male)'), 1), ~.x %>% filter(stage_asx_c ==.y) %>% pull(ci015) %>% unique())
+
+
+##Subset field and lab cells using pseudotime CIs above
+msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_lab <- list(rep(msc_gam_combi_noLEd_sce_lab), 
+                                         rep(pt_cutoffs_lab), 
+                                         rep(c('Gametocyte (female)', 'Gametocyte (male)'), 1), 
+                                         lci_lab, 
+                                         uci_lab, 
+                                         rep(c('female_pt', 'male_pt'), 1),
+                                         rep(c("MCA V3 Lab"), 2)
+                                         # rep(c(rep("",3),"MCA V3 Lab"), each=2) ##remove lab from msc 1,3,13
+                                         ) %>% 
+  pmap(.,~{
+  ..1[,..2 %>% filter((stage_asx_c ==..7) & (lf_strain != "NF54_A") & !!rlang::sym(..6) >= ..4 & !!rlang::sym(..6) <= ..5) %>% pull(bcode)]
+}) %>% 
+  set_names(paste0(rep(names(msc_gam_combi_noLEd_sce_lab), each =1)))
+
+
+for(i in 1:length(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_lab)){
+  msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_lab[[i]]@colData[,"lf_strain"] <- msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_lab[[i]]@colData[,c("lf_strain", "strain")] %>% as.data.frame() %>% mutate(across(lf_strain, ~droplevels(.))) %>% select(lf_strain)
+
+}
+
+
+```
+
+
+### tabulate strain numbers in subsets
+```{r}
+##Check the strains with sufficient numbers to include in the balancing stage
+map(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci, ~table(.x@colData[, 'lf_strain']))
+```
+
+
+### tabulate strain numbers in subsets
+```{r}
+##Check the strains with sufficient numbers to include in the balancing stage
+map(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_don, ~table(.x@colData[, 'lf_strain']))
+```
+
+
+```{r, fig.height = 3, fig.width = 14}
+# options(repr.plot.width=32, repr.plot.height=7)
+fct_theme <- theme(text=element_text(size=14),
+        axis.text=element_text(size=16), 
+            axis.title=element_text(size=16,face="bold"), 
+            legend.text = element_text(size=16), 
+            legend.title = element_text(size=16,face="bold"),
+        strip.text =element_text(size=18,face="plain", colour = 'black'))
+
+
+
+dons_de <- c("MSC1_f_don", "MSC1_m_don", "MSC3_f_don", "MSC3_m_don", "MSC13_f_don", "MSC13_m_don", "MSC14_f_don", "MSC14_m_don", "M_NF54_7G8_f", "M_NF54_7G8_m")
+don_lvls <- str_replace_all( str_remove(dons_de, "_don"), c("M_"="", "NF54_7G8"="Lab"))
+
+msc_qcd_n_gns <- map(c(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_don,msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_lab), ~.x@colData[, c('lf_strain', 'stageHL','stageHL_fine_int', 'Strain_DN', 'nCount_RNA', 'nFeature_RNA')] %>% as.data.frame) %>% 
+  bind_rows(., .id = 'sample') %>% 
+  mutate(across(sample, ~str_remove(., "_don"))) %>%
+  mutate(across(sample, ~str_replace_all(., c("M_"="", "NF54_7G8"="Lab")))) %>%
+  mutate(across(c(sample), ~factor(., levels = don_lvls))) 
+
+n_gn_counts <- msc_qcd_n_gns %>% 
+  # filter(sample != "msc1272") %>%
+  group_by(sample,  lf_strain) %>%
+  ggplot(aes(x = lf_strain, y = nCount_RNA/1e5, color = lf_strain)) +
+  geom_boxplot(position=position_dodge(width=0.8)) +
+  # scale_shape_manual(name = "T")+
+  scale_color_manual(values = strain_dset_lvls_don_col)+
+  facet_wrap(sample ~ ., nrow = 1, scales = "free_x") +
+  # geom_hline(yintercept = 3.7) +
+  theme_bw()+
+  fct_theme+
+  labs(x = "Strain", y = "Transcript\ncount (X1e5)") +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "bottom",
+        strip.background.x = element_rect(fill = "white")) +
+  guides(color= guide_legend(title.position = "left", nrow = 1, title = "Strain"), shape = guide_legend(title.position = "top", name = "Shape"))
+
+
+n_gn_counts
+```
+
+### Calculate pseudotime chunks
+```{r}
+##Generate pseudotime chunks categories with range of highest and lowest pseudotime values and breaks numbers to ensure balanced representation of cells and drop the cells without strain information
+cut_pt_denom <- rep(c(6,6,6,6), 2)
+# pts <- rep(c("female_pt", "female_pt", "male_pt", "male_pt" ),4)
+pts <- rep(c("female_pt", "male_pt" ),4)
+
+
+msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks <- list(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci, pts, cut_pt_denom) %>%
+  pmap(
+    # possibly(
+    ~{
+      sce_obj <- ..1[,!is.na(..1@colData[,'dset'])]
+      # print(sce_obj)
+      sce_obj@colData[,'ptime_cat'] <- sce_obj@colData[,c( ..2), drop=F] %>%
+        data.frame() %>% 
+        mutate(ptime_cat = cut(!!rlang::sym(..2),  breaks = c(-Inf, seq(min(!!rlang::sym(..2)),  max(!!rlang::sym(..2)), round((max(!!rlang::sym(..2)) - min(!!rlang::sym(..2)))/..3, 2)), Inf))) %>%
+        dplyr::select(ptime_cat)
+      
+      # print(glimpse(a))
+      return(sce_obj)
+    }
+    # , 'e')
+  )
+
+##Retain only for MSC14 as we dont want to compare field vs lab for the other samples
+# msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks <- msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks[str_detect(names(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks), "msc14")]
+msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks
+
+```
+
+
+```{r}
+##Browse number of strains within pseudotime chunks
+colData(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks[[2]])[,c('lf_strain', 'ptime_cat')] %>% as.data.frame() %>% dplyr::count(ptime_cat, lf_strain)
+
+```
+
+Balance the strains to ensure equal numbers in the groups
+
+## Field VS lab strain
+### Balance (subsample) the strain cells within pseudotime chunks
+```{r}
+##Subsample the cells within pseudotime chunks calculated above to ensure balanced representation of field and lab cells along trajectories 
+
+##Declaring the variables to group by for the different datasets 
+# grps <- c('ptime_cat', 'ptime_cat', 'ptime_cat')
+# grps2 <- list(c('ptime_cat', 'dset'), c('ptime_cat', 'dset'), c('ptime_cat', 'dset'))
+
+
+##- Asexual stages retaining pseudotime by stage groups containing MSC14 field cells and grouping by pseudotime chunk and stage : then sampling within pseudotime and stage group with sample size equal to the minimum dataset between field and lab for each stage within each pseudotime group
+##- Gams retaining pseudotime groups containing MSC14 field cells and grouping by pseudotime chunk only : then sampling within pseudotime group with sample size equal to the minimum dataset between field and lab
+
+##Tabulate balanced cells
+set.seed(3783822)
+
+##Remove lab cells - can be included in future if necessary by uncommenting line below 'filter(strain_dset != 'lab') %>%'
+
+##Revert order in filter https://stackoverflow.com/questions/70951525/filter-dataframe-within-a-group-with-one-column-meeting-an-and-condition-in-r
+# balanced_cells_tbl_str <- list(msc14_sub_sce_unbal_ptchunks, grps, grps2)  %>%
+balanced_cells_tbl_str_fvl <- list(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks)  %>%
+  pmap(~..1@colData[,c('dset', 'ptime_cat')] %>% 
+         as.data.frame() %>% 
+         rownames_to_column('cell_bc') %>% 
+         group_by(across(all_of(c('ptime_cat', 'dset')))) %>% 
+         mutate(cnt  = sum(dset=='Field')) %>% 
+         group_by(across(all_of(c('ptime_cat')))) %>% 
+         mutate(max_cnt = max(cnt)) %>% 
+         group_by(ptime_cat, dset) %>% 
+         mutate(samp = sample(n())) %>%
+         filter(samp <= max_cnt) %>%
+         ungroup() %>%
+         mutate(across(ptime_cat, droplevels))
+  )
+
+balanced_cells_cnts_str_fvl <- balanced_cells_tbl_str_fvl %>%
+  map(. %>% dplyr::count(ptime_cat,  dset, max_cnt, cnt))
+
+balanced_cells_tbl_str_fvl %>%
+  map(. %>% dplyr::count( dset))
+
+##Get balanced cells
+
+# set.seed(989778)
+balanced_cells_str_fvl <- balanced_cells_tbl_str_fvl %>% 
+  map(. %>% dplyr::select(cell_bc, ptime_cat))
+
+##Subset the balanced cells for the 3 objects
+msc_gcombi_noLE_sub_sce_bal_fvl <- pmap(list(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks, balanced_cells_str_fvl), ~..1[,..2$cell_bc])
+
+names(msc_gcombi_noLE_sub_sce_bal_fvl) <- paste0(names(msc_gcombi_noLE_sub_sce_bal_fvl), "_FvL")
+```
+
+
+```{r}
+##for tradeseq
+## !! NOTE - LINEAGE CHANGES WITH EVERY PSEUDOTIME RECALCULATION Modify lineage appropriately - NO WAY OF RENAMING https://github.com/statOmics/tradeSeq/issues/89 
+## 'slingPseudotime_1'] <- 'female_pt' 'slingPseudotime_3'] <- 'asexual_pt'  'slingPseudotime_4'] <- 'male_pt'
+# lins = rep(c(1,1,1,1),4)
+lins = rep(c(1,2), 4)
+
+msc_gcombi_noLE_sub_sds_bal_fvl <- map(msc_gcombi_noLE_sub_sce_bal_fvl, ~SlingshotDataSet(.x))
+msc_gcombi_noLE_sub_ptime_bal_fvl <- pmap(list(msc_gcombi_noLE_sub_sce_bal_fvl, lins),  ~slingPseudotime(..1)[,..2] )
+
+msc_gcombi_noLE_sub_cw_bal_fvl <- pmap(list(msc_gcombi_noLE_sub_sce_bal_fvl,  lins),  ~slingCurveWeights(..1)[,..2] )
+```
+
+
+#### AUTO-SUBSETING Visualize pseudotime chunks dim1&3 n dim2&3 {.tabset}
+```{r, results='asis', warning=FALSE}
+# pts <- rep(c("female_pt", "female_pt", "male_pt", "male_pt" ),4)
+pts <- rep(c("female_pt", "male_pt" ),5)
+
+## Create empty list to save strains considered for DE distribution and  pseudotime plots
+fvl_dist <- list()
+svl_dist <- list()
+pt_cols <- list()
+svl_dist_lf_strn <- list()
+pt_chunks_unbal<-list()
+pt_cols_unbal<- list()
+
+for (i in 1:length(msc_gcombi_noLE_sub_sce_bal_fvl)) {
+  cat('#####', names(msc_gcombi_noLE_sub_sce_bal_fvl[i]),'  \n')
+  print(plot(reducedDims(msc_gcombi_noLE_sub_sce_bal_fvl[[i]])$PCA[,c(1,2)], col = brewer.pal(2,"Set1")[as.factor(msc_gcombi_noLE_sub_sce_bal_fvl[[i]]$dset)], pch=16,cex = 0.4, cex.axis =1.5))
+  # print(lines(msc_gcombi_noLE_sub_sds_unbal_f10[[i]], lwd=2, col='black',linInd = lins[[i]],dims = c(1,3)))
+  cat('\n')
+  
+  umap_meta_df <- reducedDims(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks[[i]])$PCA[,c(1,2)] %>% as.data.frame() %>%rownames_to_column('cell_bc') %>% left_join(., msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_ptchunks[[i]]@colData[,c('ptime_cat','strain_dset', pts[i])] %>% as.data.frame() %>% rownames_to_column('cell_bc'), by = 'cell_bc') 
+  
+  plt<-umap_meta_df %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = !!rlang::sym(pts[i]))) + geom_point(size=2) + scale_color_distiller(name='Pseudotime', direction = 1, palette = 'Greens') + 
+    theme_void()+
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          # axis.text=element_text(size=30), 
+          # axis.title=element_text(size=28,face="bold"), 
+          # axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+          legend.text = element_text(size = 22) ,
+          legend.title = element_text(size = 24, face = "bold") ) 
+  
+  ##Save plot for cowplot grouping
+  pt_cols_unbal[[i]] =plt
+  
+  plt <- umap_meta_df %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = ptime_cat)) + geom_point(size=2) + 
+    scale_color_manual(name = "Condition", values = brewer.pal(n=9, name = "YlOrBr")[c(1,3,4:9)]) +
+    theme_void()+  
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          legend.text = element_text(size = 30) ,
+          legend.title = element_text(size = 30, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=3.5)))
+  
+  ##Save plot for cowplot grouping
+  pt_chunks_unbal[[i]] =plt
+  
+  umap_meta_df <- reducedDims(msc_gcombi_noLE_sub_sce_bal_fvl[[i]])$PCA[,c(1,2)] %>% as.data.frame() %>%rownames_to_column('cell_bc') %>% left_join(., msc_gcombi_noLE_sub_sce_bal_fvl[[i]]@colData[,c('dset',pts[i])] %>% as.data.frame() %>% rownames_to_column('cell_bc'), by = 'cell_bc') %>% mutate(across(dset, ~factor(., levels = c('Lab', 'Field')))) %>% arrange(dset)
+  
+  plt <- umap_meta_df %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = dset)) + geom_point(size=2) + scale_color_manual(name = "Condition", values = dset_cols) +
+    theme_void()+  
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          legend.text = element_text(size = 30) ,
+          legend.title = element_text(size = 30, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=3.5)))
+  
+  ##Save plot for cowplot grouping
+  fvl_dist[[i]] = plt
+  
+  print(plt)
+  cat('\n')
+  cat('\n')
+  
+  umap_meta_df <- reducedDims(msc_gcombi_noLE_sub_sce_bal_fvl[[i]])$PCA[,c(1,2)] %>% as.data.frame() %>%rownames_to_column('cell_bc') %>% left_join(., msc_gcombi_noLE_sub_sce_bal_fvl[[i]]@colData[,c('dset','strain_dset',pts[i])] %>% as.data.frame() %>% rownames_to_column('cell_bc'), by = 'cell_bc') %>% mutate(across(dset, ~factor(., levels = c('Lab', 'Field')))) %>% arrange(dset) #%>% 
+  # mutate(across(strain_dset, ~factor(., levels = rev(strain_dset_lvls_don)))) %>% arrange(strain_dset)
+  
+  plt <- umap_meta_df %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = strain_dset)) + geom_point(size=2) + scale_color_manual(name = "Condition", values = strain_dset_lvls_don_col) +
+    theme_void()+  
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          legend.text = element_text(size = 30) ,
+          legend.title = element_text(size = 30, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=3.5)))
+  
+  ##Save plot for cowplot grouping
+  svl_dist[[i]] =plt
+  
+  print(plt)
+  cat('\n')
+  cat('\n')
+  
+  
+  umap_meta_df <- reducedDims(msc_gcombi_noLE_sub_sce_bal_fvl[[i]])$PCA[,c(1,2)] %>% as.data.frame() %>%rownames_to_column('cell_bc') %>% left_join(., msc_gcombi_noLE_sub_sce_bal_fvl[[i]]@colData[,c('dset','lf_strain',pts[i])] %>% as.data.frame() %>% rownames_to_column('cell_bc'), by = 'cell_bc') %>% mutate(across(dset, ~factor(., levels = c('Lab', 'Field')))) %>% arrange(dset) #%>% 
+  # mutate(across(strain_dset, ~factor(., levels = rev(strain_dset_lvls_don)))) %>% arrange(strain_dset)
+  
+  plt <- umap_meta_df %>% 
+    filter(!is.na(lf_strain)) %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = lf_strain)) + geom_point(size=2) + 
+    scale_color_manual(name = "Condition", values = strain_dset_lvls_don_col) +
+    theme_void()+  
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          legend.text = element_text(size = 30) ,
+          legend.title = element_text(size = 30, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=3.5)))
+  
+  ##Save plot for cowplot grouping
+  svl_dist_lf_strn[[i]] =plt
+  
+  print(plt)
+  cat('\n')
+  cat('\n')
+  
+  plt <- umap_meta_df %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = !!rlang::sym(pts[i]))) + geom_point(size=2) + scale_color_distiller(name='Pseudotime', direction = 1, palette = 'Greens') + 
+    theme_void()+
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          # axis.text=element_text(size=30), 
+          # axis.title=element_text(size=28,face="bold"), 
+          # axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+          legend.text = element_text(size = 22) ,
+          legend.title = element_text(size = 24, face = "bold") ) 
+  
+  ##Save plot for cowplot grouping
+  pt_cols[[i]] =plt
+    
+  print(plt)
+  
+  cat('\n')
+  cat('\n')
+}
+
+```
+
+
+#### Adding donor strains de with nf54_vs_7g8 sole comparison - generated in #kuikjo
+```{r}
+##Check the strains with sufficient numbers to include in the balancing stage
+msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_strainsAll <- c(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci, msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_don, msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_lab)
+```
+
+### Calculate pseudotime chunks donor strains
+```{r}
+##Generate pseudotime chunks categories with range of highest and lowest pseudotime values and breaks numbers to ensure balanced representation of cells and drop the cells without strain information
+cut_pt_denom <- rep(c(6,6), 9)
+pts <- rep(c("female_pt",  "male_pt" ), 9)
+
+
+msc_gcombi_noLE_sub_sce_unbal_ptchunks <- list(msc_gcombi_noLE_sub_mf_sce_unbal_auto_ci_strainsAll, pts, cut_pt_denom) %>%
+  pmap(
+    # possibly(
+    ~{
+      sce_obj <- ..1[,!is.na(..1@colData[,'lf_strain'])]
+      # print(sce_obj)
+      sce_obj@colData[,'ptime_cat'] <- sce_obj@colData[,c( ..2), drop=F] %>%
+        data.frame() %>% 
+        mutate(ptime_cat = cut(!!rlang::sym(..2),  breaks = c(-Inf, seq(min(!!rlang::sym(..2)),  max(!!rlang::sym(..2)), round((max(!!rlang::sym(..2)) - min(!!rlang::sym(..2)))/..3, 2)), Inf))) %>%
+        dplyr::select(ptime_cat)
+      
+      # print(glimpse(a))
+      return(sce_obj)
+    }
+    # , 'e')
+  )
+  
+
+```
+
+
+```{r}
+##Browse
+colData(msc_gcombi_noLE_sub_sce_unbal_ptchunks[[3]])[,c('lf_strain', 'ptime_cat')] %>% as.data.frame() %>% dplyr::count(ptime_cat, lf_strain)
+
+```
+
+
+#### Visualize pseudotime chunks dim1&3 n dim2&3 {.tabset}
+```{r, results='asis', warning=FALSE, eval=F}
+
+# for (i in 1:5) {
+#   cat('#####', names(msc14_sub_sce_unbal_ptchunks[i]),'  \n')
+#   plot(reducedDims(msc14_sub_sce_unbal_ptchunks[[i]])$PCA[,c(1,3)], col = brewer.pal(10,"Set1")[as.factor(msc14_sub_sce_unbal_ptchunks[[i]]$ptime_cat)], pch=16,cex = 1, cex.axis =1.5)
+#   lines(msc14_sub_sds_unbal_f10[[i]], lwd=2, col='black',dims = c(1,3))
+#    cat('\n')
+#    cat('\n')
+# }
+
+```
+
+Balance the strains to ensure equal numbers in the groups
+
+## Strain VS strain
+### Balance (subsample) the strain cells within pseudotime chunks
+```{r}
+##Subsample the cells within pseudotime chunks calculated above to ensure balanced representation of field and lab cells along trajectories 
+
+##Declaring the variables to group by for the different datasets 
+# grps <- c('ptime_cat', 'ptime_cat', 'ptime_cat')
+# grps2 <- list(c('ptime_cat', 'lf_strain'), c('ptime_cat', 'lf_strain'), c('ptime_cat', 'lf_strain'))
+
+
+##- Asexual stages retaining pseudotime by stage groups containing MSC14 field cells and grouping by pseudotime chunk and stage : then sampling within pseudotime and stage group with sample size equal to the minimum dataset between field and lab for each stage within each pseudotime group
+##- Gams retaining pseudotime groups containing MSC14 field cells and grouping by pseudotime chunk only : then sampling within pseudotime group with sample size equal to the minimum dataset between field and lab
+
+##Tabulate balanced cells
+set.seed(3783822)
+
+##Remove lab cells - can be included in future if necessary by uncommenting line below 'filter(strain_dset != 'lab') %>%'
+
+## get the group to downsample by
+ds_grp <- c(rep('Strain_DN', 16), rep('lf_strain', 2))
+
+##Revert order in filter https://stackoverflow.com/questions/70951525/filter-dataframe-within-a-group-with-one-column-meeting-an-and-condition-in-r
+# balanced_cells_tbl_str <- list(msc14_sub_sce_unbal_ptchunks, grps, grps2)  %>%
+balanced_cells_tbl_str <- list(msc_gcombi_noLE_sub_sce_unbal_ptchunks, ds_grp)  %>%
+  pmap(~..1@colData[,c('lf_strain', 'ptime_cat', 'Strain_DN')] %>% 
+    as.data.frame() %>% 
+    rownames_to_column('cell_bc') %>% 
+    group_by(across(all_of(c('ptime_cat', ..2)))) %>% 
+    mutate(cnt  = sum(!is.na(!!rlang::sym(..2)))) %>% 
+             group_by(across(all_of(c('ptime_cat')))) %>% 
+             mutate(max_cnt = max(cnt)) %>% 
+             mutate(max2_cnt = max(cnt[cnt != max_cnt], na.rm = TRUE)) %>%
+             group_by(ptime_cat, lf_strain) %>% 
+             mutate(samp = sample(n()))%>%
+             filter(samp <= max2_cnt) %>%
+             ungroup() %>%
+             mutate(across(ptime_cat, droplevels))
+  )
+
+balanced_cells_cnts_str <- balanced_cells_tbl_str %>%
+  map(. %>% dplyr::count(ptime_cat,  lf_strain, max2_cnt, cnt))
+
+balanced_cells_tbl_str %>%
+  map(. %>% dplyr::count( lf_strain))
+
+##Get balanced cells
+
+# set.seed(989778)
+balanced_cells_str <- balanced_cells_tbl_str %>% 
+  map(. %>% dplyr::select(cell_bc, ptime_cat))
+
+##Subset the balanced cells for the 3 objects
+msc_gcombi_noLE_sub_sce_bal_fld <- pmap(list(msc_gcombi_noLE_sub_sce_unbal_ptchunks, balanced_cells_str), ~..1[,..2$cell_bc])
+
+
+```
+
+
+### tabulate strain numbers in subsets after downsampling lab to balance
+```{r}
+##Check the strains with sufficient numbers to include in the balancing stage
+map(msc_gcombi_noLE_sub_sce_bal_fld, ~table(.x@colData[, 'lf_strain']))
+```
+
+
+### Retain cells with strains having more than 10 in each stage
+```{r}
+##Remove groups with less than 10
+msc_gcombi_noLE_sub_sce_bal_fld_f8 <- map(msc_gcombi_noLE_sub_sce_bal_fld, ~.x[,.x@colData[, 'lf_strain', drop = F] %>% data.frame()  %>% rownames_to_column('bcode') %>% group_by(lf_strain) %>% filter(n() >=10) %>% pull(bcode)])
+
+map(msc_gcombi_noLE_sub_sce_bal_fld_f8, ~table(.x@colData[, 'lf_strain']) )
+
+```
+
+
+
+
+```{r, fig.height = 4, fig.width = 16}
+# options(repr.plot.width=32, repr.plot.height=7)
+fct_theme <- theme(text=element_text(size=14),
+        axis.text=element_text(size=16), 
+            axis.title=element_text(size=16,face="bold"), 
+            legend.text = element_text(size=16), 
+            legend.title = element_text(size=16,face="bold"),
+        strip.text =element_text(size=18,face="plain", colour = 'black'))
+
+
+msc_qcd_ds_mdata_all <- map(msc_gcombi_noLE_sub_sce_bal_fld_f8, ~.x@colData[, c('lf_strain', 'stageHL','stageHL_fine_int', 'Strain_DN', 'nCount_RNA', 'nFeature_RNA')] %>% as.data.frame) %>% 
+  bind_rows(., .id = 'sample') %>% 
+  # mutate(across(c(sample), ~factor(., levels = unlist(paste0(rep(sample_id_lst[1:4], each=2), c("_f", "_m")))))) lab_nms
+  mutate(across(c(sample), ~factor(., levels = unlist(paste0(rep(c(sample_id_lst[1:4],lab_nms), each=2), c("_f", "_m")))))) 
+
+tp_counts_all <- msc_qcd_ds_mdata_all %>% 
+  # filter(sample != "msc1272") %>%
+  group_by(sample,  lf_strain) %>%
+  add_count(name = "ss_n") %>%
+  mutate(mean_gnC = mean(nCount_RNA)) %>% 
+  select(sample, lf_strain, mean_gnC, ss_n) %>%
+  ggplot(aes(x = lf_strain, y = mean_gnC/1000, color = lf_strain)) +
+  geom_point(aes(shape = "Mean transcript count"), position=position_dodge(width=0.8), size = 3)+
+  # scale_shape_manual(name = "T")+
+  geom_point(aes(y = ss_n/10, shape = "Parasite count"), position=position_dodge(width=0.8), size = 3)+
+  # scale_shape_manual(name = "P")+
+  scale_color_manual(values = strain_dset_lvls_don_col, name = "Strain")+
+  scale_y_continuous(
+    name = "Mean transcript\ncount (X1e3)",
+    sec.axis = sec_axis( trans=~.*10, name="Parasite count")
+  ) +
+  facet_wrap(sample ~ ., nrow = 1, scales = "free_x") +
+  labs(x = "Strain") +
+  theme_bw() +
+  fct_theme+
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom",
+        axis.title.x = element_blank(),
+        strip.background.x = element_rect(fill = "white")) +
+  guides(color= "none", shape = guide_legend(title.position = "left", title = "Shape"))
+
+tp_counts_all
+```
+
+
+```{r, fig.height = 4, fig.width = 16}
+# options(repr.plot.width=32, repr.plot.height=7)
+fct_theme <- theme(text=element_text(size=14),
+        axis.text=element_text(size=16), 
+            axis.title=element_text(size=16,face="bold"), 
+            legend.text = element_text(size=16), 
+            legend.title = element_text(size=16,face="bold"),
+        strip.text =element_text(size=18,face="plain", colour = 'black'))
+
+
+dons_de <- c("MSC1_f_don", "MSC1_m_don", "MSC3_f_don", "MSC3_m_don", "MSC13_f_don", "MSC13_m_don", "MSC14_f_don", "MSC14_m_don", "M_NF54_7G8_f", "M_NF54_7G8_m")
+don_lvls <- str_replace_all( str_remove(dons_de, "_don"), c("M_"="", "NF54_7G8"="Lab"))
+
+msc_qcd_ds_mdata <- map(msc_gcombi_noLE_sub_sce_bal_fld_f8[dons_de], ~.x@colData[, c('lf_strain', 'stageHL','stageHL_fine_int', 'Strain_DN', 'nCount_RNA', 'nFeature_RNA')] %>% as.data.frame) %>% 
+  bind_rows(., .id = 'sample') %>% 
+  mutate(across(sample, ~str_remove(., "_don"))) %>%
+  mutate(across(sample, ~str_replace_all(., c("M_"="", "NF54_7G8"="Lab")))) %>%
+  mutate(across(c(sample), ~factor(., levels = don_lvls))) 
+
+tp_counts <- msc_qcd_ds_mdata %>% 
+  # filter(sample != "msc1272") %>%
+  group_by(sample,  lf_strain) %>%
+  add_count(name = "ss_n") %>%
+  mutate(mean_gnC = mean(nCount_RNA)) %>% 
+  select(sample, lf_strain, mean_gnC, ss_n) %>%
+  ggplot(aes(x = lf_strain, y = mean_gnC/1000, color = lf_strain)) +
+  geom_point(aes(shape = "Mean transcript count"), position=position_dodge(width=0.8), size = 3)+
+  # scale_shape_manual(name = "T")+
+  geom_point(aes(y = ss_n/10, shape = "Parasite count"), position=position_dodge(width=0.8), size = 3)+
+  # scale_shape_manual(name = "P")+
+  scale_color_manual(values = strain_dset_lvls_don_col, name = "Strain")+
+  scale_y_continuous(
+    name = "Mean transcript\ncount (X1e3)",
+    sec.axis = sec_axis( trans=~.*10, name="Parasite count")
+  ) +
+  facet_wrap(sample ~ ., nrow = 1, scales = "free_x") +
+  labs(x = "Strain") +
+  theme_bw() +
+  fct_theme+
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom",
+        axis.title.x = element_blank(),
+        strip.background.x = element_rect(fill = "white")) +
+  guides(color= "none", shape = guide_legend(title.position = "left", title = "Shape"))
+
+tp_counts
+```
+
+```{r, fig.height = 4, fig.width = 14}
+# options(repr.plot.width=32, repr.plot.height=7)
+t_total_counts <- msc_qcd_ds_mdata %>% 
+  # filter(sample != "msc1272") %>%
+  group_by(sample,  lf_strain) %>%
+  # summarise("sum_gn" = sum(nFeature_RNA)) %>%
+  mutate(sum_gn = sum(nCount_RNA)) %>% 
+  # add_count(name = "ss_n") %>%
+  mutate(mean_gnC = mean(nCount_RNA)) %>% 
+  select(sample, lf_strain, mean_gnC, sum_gn) %>%
+  ggplot(aes(x = lf_strain, y = sum_gn/1e5, color = lf_strain)) +
+  geom_point(position=position_dodge(width=0.8), size = 1.5)+
+  scale_color_manual(values = strain_dset_lvls_don_col)+
+  facet_wrap(sample ~ ., nrow = 1, scales = "free_x") +
+  geom_hline(yintercept = 3.7) +
+  theme_bw()+
+  fct_theme+
+  labs(x = "Strain", y = "Total transcript\ncount (X1e5)") +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "bottom",
+        strip.background.x = element_rect(fill = "white")) +
+  guides(color= guide_legend(title.position = "left", nrow = 1, title = "Strain"), shape = guide_legend(title.position = "top", name = "Shape"))
+
+t_total_counts
+```
+
+
+```{r, fig.height = 5.5, fig.width = 12}
+# options(repr.plot.width=32, repr.plot.height=7)
+plot_grid(
+  tp_counts,
+  t_total_counts,
+  nrow = 2,
+  labels = c('A','B'),
+  label_size = 24,
+  vjust = 1.5
+)
+```
+
+
+```{r, fig.height = 2.7, fig.width = 13.5}
+# options(repr.plot.width=32, repr.plot.height=7)
+plot_grid(
+  t_total_counts,
+  nrow = 1,
+  labels = c('A'),
+  label_size = 24,
+  vjust = 1.5
+)
+```
+
+### Add groups to focus on high quality comparisons
+```{r}
+## Add 2 objects where you focus on only the groups that pass the threshold
+msc13m_sc1.2_gcombi_noLE_sub_sce_bal_fld_f8 <- msc_gcombi_noLE_sub_sce_bal_fld_f8[[c("MSC3_m_don")]][,msc_gcombi_noLE_sub_sce_bal_fld_f8[[c("MSC3_m_don")]]@colData$Strain_DN %in% c("SC1", "SC2")]
+msc13m_sc1.2_gcombi_noLE_sub_sce_bal_fld_f8 <- list(msc13m_sc1.2_gcombi_noLE_sub_sce_bal_fld_f8) %>% set_names("MSC3_m_don2")
+
+msc14f_sc2.5.7_gcombi_noLE_sub_sce_bal_fld_f8 <- msc_gcombi_noLE_sub_sce_bal_fld_f8[[c("MSC14_f_don")]][,msc_gcombi_noLE_sub_sce_bal_fld_f8[[c("MSC14_f_don")]]@colData$Strain_DN %in% c("SC2", "SC5", "SC7")]
+msc14f_sc2.5.7_gcombi_noLE_sub_sce_bal_fld_f8 <- list(msc14f_sc2.5.7_gcombi_noLE_sub_sce_bal_fld_f8) %>% set_names("MSC14_f_don3")
+
+msc_gcombi_noLE_sub_sce_bal_fld_f8 <- c(msc_gcombi_noLE_sub_sce_bal_fld_f8, msc14f_sc2.5.7_gcombi_noLE_sub_sce_bal_fld_f8, msc13m_sc1.2_gcombi_noLE_sub_sce_bal_fld_f8)
+```
+
+
+#### Put subseted objects into a list and calculate metrics need for plotting and tradeseq input
+```{r}
+lins = rep(c(1,2),10)
+# lins_m = rep(c(1,2),4)
+
+msc_gcombi_noLE_sub_sds_bal_fld <- map(msc_gcombi_noLE_sub_sce_bal_fld_f8, ~SlingshotDataSet(.x))
+msc_gcombi_noLE_sub_ptime_bal_fld <- pmap(list(msc_gcombi_noLE_sub_sce_bal_fld_f8, lins),  ~slingPseudotime(..1)[,..2] )
+msc_gcombi_noLE_sub_cw_bal_fld <- pmap(list(msc_gcombi_noLE_sub_sce_bal_fld_f8,  lins),  ~slingCurveWeights(..1)[,..2] )
+
+```
+
+#### Visualize pseudotime chunks dim1&3 n dim2&3 {.tabset}
+```{r, results='asis', warning=FALSE}
+# 
+# for (i in 1:5) {
+#   cat('#####', names(msc14_sub_sce_bal_fld_f8[i]),'  \n')
+#   plot(reducedDims(msc14_sub_sce_bal_fld_f8[[i]])$PCA[,c(1,3)], col = brewer.pal(10,"Set1")[as.factor(msc14_sub_sce_bal_fld_f8[[i]]$ptime_cat)], pch=16,cex = 1, cex.axis =1.5)
+#   lines(msc14_sub_sds_unbal_f10[[i]], lwd=2, col='black',dims = c(1,3))
+#   
+#   plot(reducedDims(msc14_sub_sce_bal_fld_f8[[i]])$PCA[,c(1,3)], col = brewer.pal(10,"Set1")[as.factor(msc14_sub_sce_bal_fld_f8[[i]]$lf_strain)], pch=16,cex = 1, cex.axis =1.5)
+#   lines(msc14_sub_sds_unbal_f10[[i]], lwd=2, col='black',dims = c(1,3))
+#    cat('\n')
+#    cat('\n')
+# }
+
+```
+
+
+
+Put together the plots for the DE analysis
+             
+```{r, fig.width= 12, fig.height=12, eval=F}
+
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.5, "cm")
+)
+
+##Get legend from ncount, cfeature scatterplot
+umi_gn_count_scatter <- msc_gam_combi_noLE_de[[1]]@meta.data %>% 
+    mutate(across(strain_dset, ~case_when(is.na(Strain_DN) & . != 'Lab' ~ 'Field', T ~ .))) %>%
+    ggplot(., aes(x = nFeature_RNA, y=nCount_RNA, color=dset)) +
+    geom_point() +
+    scale_color_manual(values = c( dset_cols), name = 'Condition') +
+    theme_void()+
+    theme(legend.text = element_text(size = 16) ,
+          legend.title = element_text(size = 16, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=5)))
+
+dist_pt_lg <- cowplot::get_legend(umi_gn_count_scatter)
+
+
+## Put the plots together
+
+plts <- cowplot::plot_grid(plot_grid(NULL,
+                                     fld_lab_umaps[[2]]+ 
+                              theme(plot.background = element_rect(color = "lightgrey"),
+                                    legend.position = 'none',
+                                    plot.margin=margin(t=0.6,r=0.4,b=0.6,l=0.4,unit="cm")),
+                              NULL,
+                              nrow = 1,
+                              rel_widths = c(.25,.5,.25),
+                              labels = c('','A',''),
+                              label_size = 20,
+                              vjust = 1.5
+                              ),
+  cowplot::plot_grid(
+  plot_grid(
+  plotlist =  pmap(list(pt_cols_unbal[c(1,3,5,7)], pt_chunks_unbal[c(1,3,5,7)], fvl_dist[c(1,3,5,7)]), ~{
+    plot_grid(
+        ..1+  theme(plot.background = element_rect(color = "lightgrey"),
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"),
+                    legend.title = element_blank(),
+                    legend.position = 'bottom',
+                    legend.key.width = unit(1.2, "cm"),
+                    legend.text = element_text(size = 11)), 
+        ..2+  theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm")),
+        ..3 +  theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm")),
+        nrow=3,
+        rel_heights = c(.36,.32,.32)
+    )
+}
+), #+
+  # theme(plot.margin=margin(b=0.8,unit="cm")) + 
+  #   panel_border(),
+ncol=4,
+labels = c('B','C','D','E'),
+label_size = 20,
+vjust = 1#,
+# rel_width = c(.25,.25,.25,.25)
+
+) +
+                theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=0.2,unit="cm")),
+ggdraw(dist_pt_lg),
+ncol=2,
+rel_widths = c(.88, .12)
+) +
+                # labs(x = 'UMAP_1', y = 'UMAP_2') +
+                scale_x_continuous(name='UMAP_1') +
+                scale_y_continuous(name='UMAP_2') +
+                theme(plot.margin = margin(t=0.1,r=0.2,b=0.5,l=0.5,unit="cm"),
+                      axis.title.y = element_text(angle = 90, size = 14, face = 'bold', margin = margin(r = 3)),
+                      axis.title.x = element_text(size = 14, face = 'bold', margin = margin(t = 3)))+ 
+                guides(x= trunc_axis, y= trunc_axis) +
+                theme(axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), colour = 'black'),
+                      axis.title = element_text(hjust = 0,size=14)),
+nrow=2,
+rel_heights = c(.34, .66)
+)
+
+plts
+
+
+```                      
+                      
+```{r, fig.width= 12, fig.height=6, eval=F}
+
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.5, "cm")
+)
+
+##Get legend from ncount, cfeature scatterplot
+umi_gn_count_scatter <- msc_gam_combi_noLE_de[[1]]@meta.data %>% 
+    mutate(across(strain_dset, ~case_when(is.na(Strain_DN) & . != 'Lab' ~ 'Field', T ~ .))) %>%
+    ggplot(., aes(x = nFeature_RNA, y=nCount_RNA, color=dset)) +
+    geom_point() +
+    scale_color_manual(values = c( dset_cols), name = 'Condition') +
+    theme_void()+
+    theme(legend.text = element_text(size = 16) ,
+          legend.title = element_text(size = 16, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=5)))
+
+dist_pt_lg <- cowplot::get_legend(umi_gn_count_scatter)
+
+
+## Put the plots together
+
+plts <- cowplot::plot_grid(plot_grid(NULL,
+                                     fld_lab_umaps[[1]][[1]]+ 
+                              theme(plot.background = element_rect(color = "lightgrey"),
+                                    legend.position = 'none',
+                                    plot.margin=margin(t=0.6,r=0.4,b=0.6,l=0.4,unit="cm")),
+                              NULL,
+                              nrow = 1,
+                              rel_widths = c(.02,.96,.02),
+                              labels = c('','A',''),
+                              label_size = 20,
+                              vjust = 1.5
+                              ),
+  cowplot::plot_grid(
+  plot_grid(
+  plotlist =  pmap(list(pt_cols_unbal[c(1,2)], pt_chunks_unbal[c(1,2)], fvl_dist[c(1,2)]), ~{
+    plot_grid(
+        ..1+  theme(plot.background = element_rect(color = "lightgrey"),
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"),
+                    legend.title = element_blank(),
+                    legend.position = 'bottom',
+                    legend.key.width = unit(1.2, "cm"),
+                    legend.text = element_text(size = 11)), 
+        ..2+  theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm")),
+        ..3 +  theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm")),
+        nrow=3,
+        rel_heights = c(.36,.32,.32)
+    )
+}
+), #+
+  # theme(plot.margin=margin(b=0.8,unit="cm")) + 
+  #   panel_border(),
+ncol=2,
+labels = c('B','C'),
+label_size = 20,
+vjust = 1#,
+# rel_width = c(.25,.25,.25,.25)
+
+)+
+                theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=0.2,unit="cm")),
+ggdraw(dist_pt_lg),
+ncol=2,
+rel_widths = c(.84, .16)
+)+
+                # labs(x = 'UMAP_1', y = 'UMAP_2') +
+                scale_x_continuous(name='PC_1') +
+                scale_y_continuous(name='PC_2') +
+                theme(plot.margin = margin(t=0.1,r=0.2,b=0.5,l=0.5,unit="cm"),
+                      axis.title.y = element_text(angle = 90, size = 14, face = 'bold', margin = margin(r = 3)),
+                      axis.title.x = element_text(size = 14, face = 'bold', margin = margin(t = 3)))+ 
+                guides(x= trunc_axis, y= trunc_axis) +
+                theme(axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), colour = 'black'),
+                      axis.title = element_text(hjust = 0,size=14)),
+nrow=1,
+rel_widths = c(.44, .66)
+# rel_heights = c(.34, .66)
+)
+
+plts
+
+
+```
+
+
+
+```{r, fig.width= 12, fig.height=6, eval=F}
+
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.5, "cm")
+)
+
+##Get legend from ncount, cfeature scatterplot
+umi_gn_count_scatter <- msc_gam_combi_noLE_de[[1]]@meta.data %>% 
+    mutate(across(strain_dset, ~case_when(is.na(Strain_DN) & . != 'Lab' ~ 'Field', T ~ .))) %>%
+    ggplot(., aes(x = nFeature_RNA, y=nCount_RNA, color=dset)) +
+    geom_point() +
+    scale_color_manual(values = c( dset_cols), name = 'Condition') +
+    theme_void()+
+    theme(legend.text = element_text(size = 16) ,
+          legend.title = element_text(size = 16, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=5)))
+
+dist_pt_lg <- cowplot::get_legend(umi_gn_count_scatter)
+
+
+## Put the plots together
+
+plts <- cowplot::plot_grid(plot_grid(NULL,
+                                     fld_lab_umaps[[1]][[1]]+ 
+                              theme(plot.background = element_rect(color = "lightgrey"),
+                                    legend.position = 'none',
+                                    plot.margin=margin(t=0.6,r=0.4,b=0.6,l=0.4,unit="cm")),
+                              NULL,
+                              nrow = 1,
+                              rel_widths = c(.02,.96,.02),
+                              labels = c('','A',''),
+                              label_size = 20,
+                              vjust = 1.5
+                              ),
+  cowplot::plot_grid(
+  plot_grid(
+  plotlist =  pmap(list(pt_cols_unbal[c(1,2)], pt_chunks_unbal[c(1,2)], fvl_dist[c(1,2)]), ~{
+    plot_grid(
+        ..1+  theme(plot.background = element_rect(color = "lightgrey"),
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"),
+                    legend.title = element_blank(),
+                    legend.position = 'bottom',
+                    legend.key.width = unit(1.2, "cm"),
+                    legend.text = element_text(size = 11)), 
+        ..2+  theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm")),
+        ..3 +  theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm")),
+        nrow=3,
+        rel_heights = c(.36,.32,.32)
+    )
+}
+), #+
+  # theme(plot.margin=margin(b=0.8,unit="cm")) + 
+  #   panel_border(),
+ncol=2,
+labels = c('B','C'),
+label_size = 20,
+vjust = 1#,
+# rel_width = c(.25,.25,.25,.25)
+
+)+
+                theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=0.2,unit="cm")),
+ggdraw(dist_pt_lg),
+ncol=2,
+rel_widths = c(.84, .16)
+)+
+                # labs(x = 'UMAP_1', y = 'UMAP_2') +
+                scale_x_continuous(name='PC_1') +
+                scale_y_continuous(name='PC_2') +
+                theme(plot.margin = margin(t=0.1,r=0.2,b=0.5,l=0.5,unit="cm"),
+                      axis.title.y = element_text(angle = 90, size = 14, face = 'bold', margin = margin(r = 3)),
+                      axis.title.x = element_text(size = 14, face = 'bold', margin = margin(t = 3)))+ 
+                guides(x= trunc_axis, y= trunc_axis) +
+                theme(axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), colour = 'black'),
+                      axis.title = element_text(hjust = 0,size=14)),
+nrow=1,
+rel_widths = c(.44, .66)
+# rel_heights = c(.34, .66)
+)
+
+plts
+
+
+```
+
+```{r}
+## Add 2 objects where you focus on only the groups that pass the threshold to balance object
+msc13m_ub <- list(msc_gcombi_noLE_sub_sce_unbal_ptchunks[["MSC3_m"]]) %>% set_names("MSC3_m_don")
+msc14f_ub <- list(msc_gcombi_noLE_sub_sce_unbal_ptchunks[["MSC14_f"]]) %>% set_names("MSC14_f_don")
+
+msc_gcombi_noLE_sub_sce_unbal_ptchunks <- c(msc_gcombi_noLE_sub_sce_unbal_ptchunks, msc14f_ub, msc13m_ub)
+
+
+```
+
+#### Visualize balanced pseudotime chunks dim1&3 n dim2&3 {.tabset}
+```{r, results='asis', warning=FALSE}
+## Create empty list to save strains considered for DE distribution and  pseudotime plots
+# pts2 <- c(pts, pts)
+
+pts <- rep(c("female_pt",  "male_pt" ), 10)
+pt_chunks<-list()
+pt_chunks_bal<-list()
+svl_dist_lf_strn<-list()
+pt_bal_cols<-list()
+gam_bg_strain <- list()
+don_nm <- str_replace_all(names(msc_gcombi_noLE_sub_sce_bal_fld_f8), c("_m" = " male", "_f" = " female"))
+
+
+## Whole integrated PC coordinates and field_lab metadata
+gam_pc_mdata <- msc_gam_combi_noLE_de[[1]]@reductions$pca@cell.embeddings[,c(1,2)] %>% as.data.frame() %>%rownames_to_column('cell_bc') %>% left_join(., msc_gam_combi_noLE_de[[1]]@meta.data[,c('dset'), drop=F] %>% rownames_to_column('cell_bc'), by = 'cell_bc') 
+
+for (i in 1:length(msc_gcombi_noLE_sub_sce_bal_fld_f8)) {
+  cat('#####', names(msc_gcombi_noLE_sub_sce_bal_fld_f8[i]),'  \n')
+
+  umap_meta_df <- reducedDims(msc_gcombi_noLE_sub_sce_unbal_ptchunks[[i]])$PCA[,c(1,2)] %>% as.data.frame() %>%rownames_to_column('cell_bc') %>% left_join(., msc_gcombi_noLE_sub_sce_unbal_ptchunks[[i]]@colData[,c('ptime_cat','strain_dset', pts[i])] %>% as.data.frame() %>% rownames_to_column('cell_bc'), by = 'cell_bc') 
+  
+  plt <- umap_meta_df %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = ptime_cat)) + geom_point(size=2) + 
+    scale_color_manual(name = "Condition", values = brewer.pal(n=9, name = "YlOrBr")[c(1,3,4:9)]) +
+    theme_void()+  
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          legend.text = element_text(size = 30) ,
+          legend.title = element_text(size = 30, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=3.5)))
+  
+  ##Save plot for cowplot grouping
+  pt_chunks[[i]] =plt
+  
+  print(plt)
+  cat('\n')
+  cat('\n')
+  
+  umap_meta_df <- reducedDims(msc_gcombi_noLE_sub_sce_bal_fld_f8[[i]])$PCA[,c(1,2)] %>% as.data.frame() %>%rownames_to_column('cell_bc') %>% left_join(., msc_gcombi_noLE_sub_sce_bal_fld_f8[[i]]@colData[,c('ptime_cat','lf_strain',pts[i])] %>% as.data.frame() %>% rownames_to_column('cell_bc'), by = 'cell_bc')  #%>% 
+  # mutate(across(strain_dset, ~factor(., levels = rev(strain_dset_lvls_don)))) %>% arrange(strain_dset)
+
+  plt <- umap_meta_df %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = ptime_cat)) + geom_point(size=2) + 
+    # scale_color_brewer(name = "Condition", values = brewer.pal(7,"Set1")) +
+    # scale_color_manual(name = "Condition", values = brewer.pal(8,"YlGnBu")) +
+    scale_color_manual(name = "Condition", values = brewer.pal(n=9, name = "YlOrBr")[c(1,3,4:9)]) +
+    theme_void()+  
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          legend.text = element_text(size = 30) ,
+          legend.title = element_text(size = 30, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=3.5)))
+  
+  ##Save plot for cowplot grouping
+  pt_chunks_bal[[i]] =plt
+  print(plt)
+  
+  plt <- umap_meta_df %>% 
+    mutate(samp = sample(n()),
+           strn_order = case_when(str_detect(lf_strain, "NF54") ~ 1, str_detect(lf_strain, "7G8") ~ 2, str_detect(lf_strain, "SC") ~ samp+2)) %>%
+    arrange(strn_order) %>%
+    ggplot(aes(x = PC_1, y =PC_2, color = lf_strain)) + 
+    geom_point(size=2) + 
+    scale_color_manual(name = "Condition", values = strain_dset_lvls_don_col) +
+    theme_void()+  
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          legend.text = element_text(size = 30) ,
+          legend.title = element_text(size = 30, face = "bold") )+
+    guides(colour = guide_legend(override.aes = list(size=3.5)))
+  
+  ##Save plot for cowplot grouping
+  svl_dist_lf_strn[[i]] =plt
+  print(plt)
+  
+  plt <- umap_meta_df %>% 
+    ggplot(aes(x = PC_1, y =PC_2, color = !!rlang::sym(pts[i]))) + geom_point(size=2) + 
+    scale_color_distiller(name='Pseudotime', direction = 1, palette = 'Greens') + 
+    theme_void()+
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          # axis.text=element_text(size=30), 
+          # axis.title=element_text(size=28,face="bold"), 
+          # axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+          legend.text = element_text(size = 22) ,
+          legend.title = element_text(size = 24, face = "bold") ) 
+  
+  ##Save plot for cowplot grouping
+  pt_bal_cols[[i]] =plt
+  print(plt)
+  
+   plt<-gam_pc_mdata %>% left_join(., msc_gcombi_noLE_sub_sce_bal_fld_f8[[i]]@colData[,c('lf_strain'), drop = F] %>% as.data.frame() %>% rownames_to_column('cell_bc'), by = 'cell_bc') %>% 
+    mutate(ds_strain = coalesce(lf_strain, dset),
+           across(ds_strain, ~case_when(. == "NF54_A" ~ "Lab", T ~ .)),
+           across(ds_strain, ~droplevels(factor(., levels = strain_dset_lvls))),
+           hl = case_when(is.na(lf_strain) ~ 0.5, !is.na(lf_strain) ~ 1.5)) %>%
+    mutate(samp = sample(n()),
+           strn_order = case_when(is.na(lf_strain) & dset == "Lab" ~ 1, is.na(lf_strain) & dset == "Field" ~ 2, str_detect(lf_strain, "NF54") ~ 3, str_detect(lf_strain, "7G8") ~ 3, is.na(lf_strain) & dset == "Field" ~ 3, str_detect(lf_strain, "SC") ~ samp+3)) %>%
+    arrange(strn_order) %>%
+    ggplot(aes(x = PC_1, y =PC_2, color = ds_strain)) + 
+    geom_point(aes( size = hl)) +
+    scale_size_continuous(range = c(0.5, 2)) +
+    scale_color_manual(name = "Condition", values = c("Lab" = "#e5e5e5", strain_dset_lvls_don_col, "Field" = "#aeaeae")) +
+     labs(title = don_nm[[i]]) + 
+    theme_void()+  
+    theme(axis.text=element_blank(), 
+          axis.title=element_blank(),
+          legend.text = element_text(size = 30) ,
+          legend.title = element_text(size = 30, face = "bold"),
+          plot.title = element_text(size=14, hjust = 0.5, face = "bold"))+
+    guides(colour = guide_legend(override.aes = list(size=3.5)), size = F)
+  
+   gam_bg_strain[[i]] =plt
+   
+  print(plt)
+  cat('\n')
+  cat('\n')
+
+}
+
+```
+
+
+
+#### Visualize slingshot trajectories cells grouped by 1)dim1_2_dset(field vs lab), 2)(dim2_3_dset(field vs lab) {.tabset}
+```{r, results='asis', eval=F}
+##Visualize slingshot trajectories in the different datasets in different dimensions
+
+# for (i in 1:length(msc14_sub_sce_bal_fld_f8)) {
+#   cat('##### dim1_2_by_dset', i,'  \n')
+#   plot(reducedDims(msc14_sub_sce_unbal_f10[[i]])$PCA[,c(1,2)], col = brewer.pal(4,"Set1")[as.factor(msc14_sub_sce_unbal_f10[[i]]$strain_dset)], pch=16, asp = 1,cex = 0.5)
+#   lines(msc14_sub_sds_unbal_f10[[i]], lwd=2, col='black',dims = c(1,2))
+#   cat('\n')
+#   cat('\n')
+# }
+# 
+# for (i in 1:length(msc14_sub_sce_bal_fld_f8)) {
+#   cat('##### dim2_3_by_dset', i,'  \n')
+#   plot(reducedDims(msc14_sub_sce_unbal_f10[[i]])$PCA[,c(2,3)], col = brewer.pal(4,"Set1")[as.factor(msc14_sub_sce_unbal_f10[[i]]$strain_dset)], pch=16, asp = 1,cex = 0.5)
+#   lines(msc14_sub_sds_unbal_f10[[i]], lwd=2, col='black',dims = c(2,3))
+#   cat('\n')
+#   cat('\n')
+#   
+# }
+
+```
+
+
+#### Visualize  cells
+
+##### Strain distribution along pseudotime in datasets {.tabset}
+```{r, results='asis', warning=FALSE, fig.width= 6,  fig.height=3.5}
+##Visualize treajectory dimension 1 and 2
+##For main vignettes fig.width= 6,  fig.height=3.5
+##For heatmap vignettes -fig.width= 4.5,  fig.height=5
+##4
+
+svs_denst_plt <- list()
+svs_denst_lfs_plts <- list()
+fvl_denst_plt <- list()
+  
+for (i in 1:length(msc_gcombi_noLE_sub_sce_bal_fld_f8)) {
+  # cat('###### ',names(msc14_sub_sce_unbal_f10[i]),'  \n')
+  cat('\n')
+  
+  cat('####### Freqpoly over pseudotime')
+  # plt = SummarizedExperiment::colData(msc14_sub_sce_unbal_f10[[i]])[,c('strain_dset', pts[i])]  %>% as.data.frame() %>% filter(!is.na(strain_dset)) %>% ggplot(., aes(x = !! rlang::sym(pts[i]), col=strain_dset)) +
+  #   geom_freqpoly()
+  # print(plt)
+  # cat('\n')
+  # cat('\n')
+  # 
+  # cat('####### Freqpoly for strains only over pseudotime')
+  # plt = SummarizedExperiment::colData(msc14_sub_sce_unbal_f10[[i]])[,c('strain', pts[i])]  %>% as.data.frame() %>% filter(!is.na(strain)) %>% 
+  #   ggplot(., aes(x = !! rlang::sym(pts[i]), col=strain, fill=strain)) + 
+  #   scale_color_manual(name = "Strains", values = strain_cols_n)+ 
+  #   scale_fill_manual(name = "Strains", values = strain_cols_n)+
+  #   geom_density(aes(y = ..count..*0.015), size=2, bw = 0.015, alpha=.2)+
+  #   # geom_freqpoly()+
+  #   theme_classic()+
+  #   theme(axis.text=element_text(size=26),
+  #         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+  #         axis.title=element_text(size=30,face="bold"), 
+  #         legend.text = element_text(size = 26) ,
+  #         legend.title = element_text(size = 28, face = "bold"),
+  #         # legend.box.margin = margin(t = 0, r = 4.1, b = 0, l = 0, unit = "cm"),#######
+  #         # legend.position="bottom",
+  #         # legend.direction="vertical"
+  #   ) +
+  #   labs(x = 'Pseudotime', y='Counts') +
+  #   guides(color = guide_legend(override.aes = list(size = 4), title.position = "top"))#+
+  # # coord_fixed(ratio = 0.04)
+  # svs_denst_plt[[i]] = plt 
+  #   
+  # 
+  # print(plt)
+  # cat('\n')
+  # cat('\n')
+  
+  cat('####### Freqpoly for strains only over pseudotime')
+  plt = SummarizedExperiment::colData(msc_gcombi_noLE_sub_sce_bal_fld_f8[[i]])[,c('lf_strain', pts[i])]  %>% as.data.frame() %>% filter(!is.na(lf_strain) & lf_strain!='NF54_A') %>% 
+    ggplot(., aes(x = !! rlang::sym(pts[i]), col=lf_strain, fill=lf_strain)) + 
+    scale_color_manual(name = "Strains", values = strain_dset_lvls_don_col)+ 
+    scale_fill_manual(name = "Strains", values = strain_dset_lvls_don_col)+
+    geom_density(aes(y = ..count..*0.18), size=2, bw = 0.18, alpha=.2)+
+    # geom_freqpoly()+
+    theme_classic()+
+    theme(axis.text=element_text(size=26),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+          axis.title=element_text(size=30,face="bold"), 
+          legend.text = element_text(size = 26) ,
+          legend.title = element_text(size = 28, face = "bold"),
+          # legend.box.margin = margin(t = 0, r = 4.1, b = 0, l = 0, unit = "cm"),#######
+          # legend.position="bottom",
+          # legend.direction="vertical"
+    ) +
+    labs(x = 'Pseudotime', y='Counts') +
+    guides(color = guide_legend(override.aes = list(size = 4), title.position = "top"))#+
+  # coord_fixed(ratio = 0.04)
+  svs_denst_lfs_plts[[i]] = plt 
+    
+  
+  print(plt)
+  cat('\n')
+  cat('\n')
+  
+  # cat('####### Freqpoly for strains only over pseudotime')
+  # plt = SummarizedExperiment::colData(msc14_sub_sce_unbal_f10[[i]])[,c('dset', pts[i])]  %>% as.data.frame() %>% filter(!is.na(dset)) %>% 
+  #   ggplot(., aes(x = !! rlang::sym(pts[i]), col=dset, fill=dset)) + 
+  #   scale_color_manual(name = "Condition", values = dset_cols)+ 
+  #   scale_fill_manual(name = "Condition", values = dset_cols)+
+  #   geom_density(aes(y = ..count..*0.0015), size=2, bw = 0.015, alpha=.2)+
+  #   # geom_freqpoly()+
+  #   theme_classic()+
+  #   theme(axis.text=element_text(size=26),
+  #         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+  #         axis.title=element_text(size=26,face="bold"), 
+  #         legend.text = element_text(size = 26) ,
+  #         legend.title = element_text(size = 26, face = "bold"),
+  #         # legend.position="bottom",
+  #         # legend.direction="vertical"
+  #   ) +
+  #   labs(x = 'Pseudotime', y='Counts (X10)')  +
+  #   guides(color = guide_legend(override.aes = list(size = 4), title.position = "top"))#+
+  # # coord_fixed(ratio = 0.012)
+  # 
+  # fvl_denst_plt[[i]] = plt 
+  # 
+  # print(plt)
+  # cat('\n')
+  # cat('\n')
+  # 
+  # cat('####### Barplots over pseudotime chunks')
+  # plt = SummarizedExperiment::colData(msc14_sub_sce_unbal_f10[[i]])[,c('strain_dset', pts[i])]  %>% as.data.frame() %>% filter(!is.na(strain_dset)) %>% ggplot(., aes(x = !! rlang::sym(pts[i]),fill=strain_dset)) +
+  #   geom_histogram()
+  # print(plt)
+  
+  cat('\n')
+  cat('\n')
+  cat('\n')
+}
+
+```
+
+Save density plots for including in other plots
+```{r}
+saveRDS(svs_denst_lfs_plts, "plots/mali2021/svs_denst_lfs_plts.RDS")
+```
+
+Put together the plots for the LAB AND FIELD STRAIN BALANCING BEFORE DE analysis
+             
+
+```{r, fig.width= 13, fig.height=16, eval=F}
+
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.5, "cm")
+)
+
+##Get legend from ncount, cfeature scatterplot
+umi_gn_count_scatter <- msc_gam_combi_noLE_de[[1]]@meta.data %>% 
+  filter(!is.na(lf_strain) & lf_strain != 'NF54_A') %>%
+  ggplot(., aes(x = nFeature_RNA, y=nCount_RNA, color=lf_strain)) +
+  geom_point() +
+  scale_color_manual(values = c(strain_cols_n, dset_cols), name = 'Condition') +
+  theme_void()+
+  theme(legend.text = element_text(size = 20) ,
+        legend.title = element_text(size = 20, face = "bold") )+
+  guides(colour = guide_legend(override.aes = list(size=5)))
+
+dist_pt_lg <- cowplot::get_legend(umi_gn_count_scatter)
+
+pt_theme <- theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"))
+
+## Put the plots together
+
+pt_plt_fn <- function(pt_lst=pt_chunks[c(1,3,5,7)], cond_lst=svl_dist_lf_strn[c(1,3,5,7)], den_lst=svs_denst_lfs_plts[c(1,3,5,7)]) {
+  cowplot::plot_grid(
+  cowplot::plot_grid(
+  plot_grid(
+    plotlist =  pmap(list(pt_lst, cond_lst, list(c('A','E'), c('B','F'), c('C','G'), c('D','H'))), ~{
+      plot_grid(
+        ..1 + pt_theme, 
+        ..2 + pt_theme, 
+        nrow=2,
+        rel_heights = c(.5,.5),
+    labels = ..3,
+    label_size = 20,
+    vjust = 1
+      )
+    }
+    ), #+
+    # theme(plot.margin=margin(b=0.8,unit="cm")) + 
+    #   panel_border(),
+    ncol=4,
+    labels = c('A','B','C','D'),
+    label_size = 20,
+    vjust = 1#,
+    # rel_width = c(.25,.25,.25,.25)
+    
+  )+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=0.2,unit="cm"))+
+  # labs(x = 'UMAP_1', y = 'UMAP_2') +
+  scale_x_continuous(name='PC_1') +
+  scale_y_continuous(name='PC_2') +
+  theme(plot.margin = margin(t=0.1,r=0.2,b=0.5,l=0.5,unit="cm"),
+        axis.title.y = element_text(angle = 90, size = 14, face = 'bold', margin = margin(r = 3)),
+        axis.title.x = element_text(size = 14, face = 'bold', margin = margin(t = 3)))+ 
+  guides(x= trunc_axis, y= trunc_axis) +
+  theme(axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), colour = 'black'),
+        axis.title = element_text(hjust = 0,size=14)),
+plot_grid(
+    plotlist =  map(den_lst, ~{
+      
+        .x +
+          theme(axis.text=element_text(size=14),
+                axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+                axis.title=element_text(size=16,face="bold"), 
+                legend.text = element_text(size = 16) ,
+                legend.title = element_text(size = 17, face = "bold"),
+                legend.position="none",
+                plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"),
+                plot.background = element_rect(color = "lightgrey")#,
+                # plot.margin=margin(t=1,r=0.2,b=1,l=0.2,unit="cm")
+          )
+    }
+    ), 
+    ncol=4,
+    labels = c('I','J','K','L'),
+    label_size = 20,
+    vjust = 1
+    # rel_width = c(.25,.25,.25,.25)
+    
+  )+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=1,unit="cm")),
+nrow=2,
+   rel_heights = c(.7,.3)
+)+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=0.2,unit="cm")),
+  ggdraw(dist_pt_lg),
+  ncol=2,
+  rel_widths = c(.88, .12)
+)
+}
+
+plts_f <- pt_plt_fn()
+plts_m <- pt_plt_fn(pt_lst=pt_chunks[c(2,4,6,8)], cond_lst=svl_dist_lf_strn[c(2,4,6,8)], den_lst=svs_denst_lfs_plts[c(2,4,6,8)])
+
+plts <-plot_grid(plts_f,plts_m, nrow = 2)
+plts
+```
+
+
+```{r, fig.width= 13, fig.height=16, eval=F}
+
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.5, "cm")
+)
+
+##Get legend from ncount, cfeature scatterplot
+umi_gn_count_scatter <- msc_gam_combi_noLE_de[[1]]@meta.data %>% 
+    mutate(ds_strain = case_when(str_detect(stageHL, "fem") & lf_strain == "SC1" ~ "Field", lf_strain == 'NF54_A' ~ "Lab", T ~ lf_strain),
+           across(ds_strain, ~droplevels(factor(., levels = strain_dset_lvls)))) %>%
+  ggplot(., aes(x = nFeature_RNA, y=nCount_RNA, color=ds_strain)) +
+  geom_point() +
+  scale_color_manual(values =c("Lab" = "#e5e5e5", strain_dset_lvls_don_col, "Field" = "#aeaeae"), name = 'Condition') +
+  theme_void()+
+  theme(legend.text = element_text(size = 20) ,
+        legend.title = element_text(size = 20, face = "bold") )+
+  guides(colour = guide_legend(override.aes = list(size=5)))
+
+# gam_pc_mdata %>% left_join(., msc_gcombi_noLE_sub_sce_bal_fld_f8[[i]]@colData[,c('lf_strain'), drop = F] %>% as.data.frame() %>% rownames_to_column('cell_bc'), by = 'cell_bc') %>% 
+#     mutate(ds_strain = coalesce(lf_strain, dset),
+#            across(ds_strain, ~case_when(. == "NF54_A" ~ "Lab", T ~ .)),
+#            across(ds_strain, ~droplevels(factor(., levels = strain_dset_lvls))),
+#            hl = case_when(is.na(lf_strain) ~ 0.5, !is.na(lf_strain) ~ 1.5)) %>%
+#     mutate(samp = sample(n()),
+#            strn_order = case_when(is.na(lf_strain) & dset == "Lab" ~ 1, is.na(lf_strain) & dset == "Field" ~ 2, str_detect(lf_strain, "NF54") ~ 3, str_detect(lf_strain, "7G8") ~ 3, is.na(lf_strain) & dset == "Field" ~ 3, str_detect(lf_strain, "SC") ~ samp+3)) %>%
+#     arrange(strn_order) %>%
+#     ggplot(aes(x = PC_1, y =PC_2, color = ds_strain)) + 
+#     geom_point(aes( size = hl)) +
+#     scale_size_continuous(range = c(0.5, 2)) +
+#     scale_color_manual(name = "Condition", values = c("Lab" = "#e5e5e5", strain_dset_lvls_don_col, "Field" = "#aeaeae")) +
+#     theme_void()+  
+#     theme(axis.text=element_blank(), 
+#           axis.title=element_blank(),
+#           legend.text = element_text(size = 30) ,
+#           legend.title = element_text(size = 30, face = "bold") )+
+#     guides(colour = guide_legend(override.aes = list(size=3.5)), size = F)
+
+dist_pt_lg <- cowplot::get_legend(umi_gn_count_scatter)
+
+```
+
+```{r, fig.width= 12, fig.height=16, eval=F}
+
+pt_theme <- theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"))
+
+## Put the plots together
+
+pt_plt_fn <- function(gam_pca= gam_bg_strain[c(1,3,5,7, 9) +8], pt_lst=pt_chunks_bal[c(1,3,5,7, 9)+8], cond_lst=svl_dist_lf_strn[c(1,3,5,7, 9)+8], den_lst=svs_denst_lfs_plts[c(1,3,5,7, 9)+8]) {
+  cowplot::plot_grid(
+  plot_grid(
+    plotlist =  pmap(list(gam_pca, pt_lst, cond_lst, list(c('A','B','C'), c('','',''), c('','',''), c('','',''), c('','',''))), ~{
+      plot_grid(
+        ..1 + pt_theme,
+        ..2 + pt_theme, 
+        ..3 + pt_theme, 
+        nrow=3,
+        rel_heights = c(.37,.315,.315),
+    labels = ..4,
+    label_size = 20,
+    vjust = 1
+      )
+    }
+    ), #+
+    # theme(plot.margin=margin(b=0.8,unit="cm")) + 
+    #   panel_border(),
+    ncol=5,
+    # labels = c('A','B','C','D'),
+    label_size = 20,
+    vjust = 1#,
+    # rel_width = c(.25,.25,.25,.25)
+    
+  )+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=0.2,unit="cm"))+
+  # labs(x = 'UMAP_1', y = 'UMAP_2') +
+  scale_x_continuous(name='PC_1') +
+  scale_y_continuous(name='PC_2') +
+  theme(plot.margin = margin(t=0.1,r=0.2,b=0.5,l=0.5,unit="cm"),
+        axis.title.y = element_text(angle = 90, size = 14, face = 'bold', margin = margin(r = 3)),
+        axis.title.x = element_text(size = 14, face = 'bold', margin = margin(t = 3)))+ 
+  guides(x= trunc_axis, y= trunc_axis) +
+  theme(axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), colour = 'black'),
+        axis.title = element_text(hjust = 0,size=14)),
+plot_grid(
+    plotlist =  map(den_lst, ~{
+      
+        .x +
+          theme(axis.text=element_text(size=14),
+                axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+                axis.title=element_text(size=16,face="bold"), 
+                legend.text = element_text(size = 16) ,
+                legend.title = element_text(size = 17, face = "bold"),
+                legend.position="none",
+                plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"),
+                plot.background = element_rect(color = "lightgrey")#,
+                # plot.margin=margin(t=1,r=0.2,b=1,l=0.2,unit="cm")
+          )
+    }
+    ), 
+    ncol=5,
+    labels = c('D','','',''),
+    label_size = 20,
+    vjust = 1
+    # rel_width = c(.25,.25,.25,.25)
+    
+  )+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=1,unit="cm")),
+nrow=2,
+   rel_heights = c(.72,.28)
+
+)
+}
+
+plts_f <- pt_plt_fn()
+plts_m <- pt_plt_fn(gam_pca= gam_bg_strain[c(2,4,6,8, 10)+8], pt_lst=pt_chunks_bal[c(2,4,6,8, 10)+8], cond_lst=svl_dist_lf_strn[c(2,4,6,8, 10)+8], den_lst=svs_denst_lfs_plts[c(2,4,6,8, 10)+8])
+
+plts <-plot_grid(
+  plot_grid(plts_f,plts_m, nrow = 2)+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=1,unit="cm")),
+  ggdraw(dist_pt_lg),
+  ncol = 2,
+  rel_widths = c(.89, .11)
+)
+
+plts
+```
+
+```{r, fig.width= 12, fig.height=16, eval=F}
+
+pt_theme <- theme(plot.background = element_rect(color = "lightgrey"),
+                    legend.position = 'none',
+                    plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"))
+
+## Put the plots together
+
+pt_plt_fn <- function(gam_pca= gam_bg_strain[c(1,3,5,7, 9)], pt_lst=pt_chunks_bal[c(1,3,5,7, 9)], cond_lst=svl_dist_lf_strn[c(1,3,5,7, 9)], den_lst=svs_denst_lfs_plts[c(1,3,5,7, 9)]) {
+  cowplot::plot_grid(
+  plot_grid(
+    plotlist =  pmap(list(gam_pca, pt_lst, cond_lst, list(c('A','B','C'), c('','',''), c('','',''), c('','',''), c('','',''))), ~{
+      plot_grid(
+        ..1 + pt_theme,
+        ..2 + pt_theme, 
+        ..3 + pt_theme, 
+        nrow=3,
+        rel_heights = c(.37,.315,.315),
+    labels = ..4,
+    label_size = 20,
+    vjust = 1
+      )
+    }
+    ), #+
+    # theme(plot.margin=margin(b=0.8,unit="cm")) + 
+    #   panel_border(),
+    ncol=5,
+    # labels = c('A','B','C','D'),
+    label_size = 20,
+    vjust = 1#,
+    # rel_width = c(.25,.25,.25,.25)
+    
+  )+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=0.2,unit="cm"))+
+  # labs(x = 'UMAP_1', y = 'UMAP_2') +
+  scale_x_continuous(name='PC_1') +
+  scale_y_continuous(name='PC_2') +
+  theme(plot.margin = margin(t=0.1,r=0.2,b=0.5,l=0.5,unit="cm"),
+        axis.title.y = element_text(angle = 90, size = 14, face = 'bold', margin = margin(r = 3)),
+        axis.title.x = element_text(size = 14, face = 'bold', margin = margin(t = 3)))+ 
+  guides(x= trunc_axis, y= trunc_axis) +
+  theme(axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), colour = 'black'),
+        axis.title = element_text(hjust = 0,size=14)),
+plot_grid(
+    plotlist =  map(den_lst, ~{
+      
+        .x +
+          theme(axis.text=element_text(size=14),
+                axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+                axis.title=element_text(size=16,face="bold"), 
+                legend.text = element_text(size = 16) ,
+                legend.title = element_text(size = 17, face = "bold"),
+                legend.position="none",
+                plot.margin=margin(t=0.4,r=0.1,b=0.4,l=0.1,unit="cm"),
+                plot.background = element_rect(color = "lightgrey")#,
+                # plot.margin=margin(t=1,r=0.2,b=1,l=0.2,unit="cm")
+          )
+    }
+    ), 
+    ncol=5,
+    labels = c('D','','',''),
+    label_size = 20,
+    vjust = 1
+    # rel_width = c(.25,.25,.25,.25)
+    
+  )+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=1,unit="cm")),
+nrow=2,
+   rel_heights = c(.72,.28)
+
+)
+}
+
+plts_f <- pt_plt_fn()
+plts_m <- pt_plt_fn(gam_pca= gam_bg_strain[c(2,4,6,8, 10)], pt_lst=pt_chunks_bal[c(2,4,6,8, 10)], cond_lst=svl_dist_lf_strn[c(2,4,6,8, 10)], den_lst=svs_denst_lfs_plts[c(2,4,6,8, 10)])
+
+plts <-plot_grid(
+  plot_grid(plts_f,plts_m, nrow = 2)+
+    theme(plot.margin = margin(t=0.1,r=0.1,b=0.2,l=1,unit="cm")),
+  ggdraw(dist_pt_lg),
+  ncol = 2,
+  rel_widths = c(.89, .11)
+)
+
+plts
+```
+
+Save plot for plot_grid of density plot with heatmap and upset plot
+```{r, results='asis', warning=FALSE, fig.width= 4.5,  fig.height=5}
+##Visualize treajectory dimension 1 and 2
+##For main vignettes fig.width= 6,  fig.height=3.5
+##For heatmap vignettes -fig.width= 4.5,  fig.height=5
+##4
+# 
+# for (i in 1:length(msc14_sub_sce_unbal_f10)) {
+# 
+#     plt = SummarizedExperiment::colData(msc14_sub_sce_unbal_f10[[i]])[,c('strain', pts[i])]  %>% as.data.frame() %>% filter(!is.na(strain)) %>% 
+#     ggplot(., aes(x = !! rlang::sym(pts[i]), col=strain, fill=strain)) + 
+#     scale_color_manual(name = "Strains", values = strain_cols_n)+ 
+#     scale_fill_manual(name = "Strains", values = strain_cols_n)+
+#     geom_density(aes(y = ..count..*0.015), size=2, bw = 0.015, alpha=.2)+
+#     # geom_freqpoly()+
+#     theme_classic()+
+#     theme(axis.text=element_text(size=26),
+#           axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+#           axis.title=element_text(size=30,face="bold"), 
+#           legend.text = element_text(size = 26) ,
+#           legend.title = element_text(size = 28, face = "bold"),
+#           # legend.box.margin = margin(t = 0, r = 4.1, b = 0, l = 0, unit = "cm"),#######
+#           legend.position="bottom",
+#           # legend.direction="vertical"
+#     ) +
+#     labs(x = 'Pseudotime', y='Counts') +
+#     guides(color = guide_legend(override.aes = list(size = 4), ncol = 3,title.position = "top"))#+
+#   # coord_fixed(ratio = 0.04)
+#     # print(plt)
+#   
+# 
+#   cat('\n')
+# }
+
+```
+
+## Tradeseq DE
+### Save files and tranfer to farm for tradeseq analysis & and read results
+save tradeseq input files for running tradeseq on farm as it takes time on local
+
+
+```{r}
+
+##save RDS for running in farm
+# msc14_sub_sce<- c(msc14_sub_sce_unbal_f10, msc14_sub_sce_bal_fvl, msc14_sub_sce_bal_fld_f8)
+# msc14_sub_sds<- c(msc14_sub_sds_unbal_f10, msc14_sub_sds_bal_fvl, msc14_sub_sds_bal_fld)
+# msc14_sub_ptime<- c(msc14_sub_ptime_unbal_f10, msc14_sub_ptime_bal_fvl, msc14_sub_ptime_bal_fld)
+# msc14_sub_cw<- c(msc14_sub_cw_unbal_f10,msc14_sub_cw_bal_fvl, msc14_sub_cw_bal_fld)
+
+msc_gcombi_noLE_sub_sce<- c(msc_gcombi_noLE_sub_sce_bal_fvl, msc_gcombi_noLE_sub_sce_bal_fld_f8)
+msc_gcombi_noLE_sub_sds<- c(msc_gcombi_noLE_sub_sds_bal_fvl, msc_gcombi_noLE_sub_sds_bal_fld)
+msc_gcombi_noLE_sub_ptime<- c(msc_gcombi_noLE_sub_ptime_bal_fvl, msc_gcombi_noLE_sub_ptime_bal_fld)
+msc_gcombi_noLE_sub_cw<- c(msc_gcombi_noLE_sub_cw_bal_fvl, msc_gcombi_noLE_sub_cw_bal_fld)
+
+# msc14_sub_sce<- c(msc14_sub_sce_unbal_f10, msc14_sub_sce_bal_fvl, msc14_sub_sce_bal_fld_f8[c(1,3,5)])
+
+obj_lst_str <- list(msc_gcombi_noLE_sub_sce, msc_gcombi_noLE_sub_sds, msc_gcombi_noLE_sub_ptime, msc_gcombi_noLE_sub_cw)
+names(obj_lst_str) <- c('msc_gcombi_noLE_sub_sce', 'msc_gcombi_noLE_sub_sds', 'msc_gcombi_noLE_sub_ptime', 'msc_gcombi_noLE_sub_cw')
+
+system('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_inp/')
+system('rm /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_inp/*')
+
+imap(obj_lst_str, ~saveRDS(.x, paste0('data/processed/DB52e_star/pseudotime_tradeseq_inp/', .y,'.RDS')))
+
+```
+
+
+```{r}
+system('rsync -av --delete /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_inp jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/')
+```
+
+
+### save the intergrated objects for downstream MAST DE and visualizations analysis
+```{r, fig.width = 32, fig.height = 7}
+
+saveRDS(msc_gam_combi_noLE_de, "data/processed/DB52e_star/msc_gam_combi_noLE_de.RDS")
+saveRDS(msc_gcombi_noLE_sub_sce, "data/processed/DB52e_star/msc_gcombi_noLE_sub_sce.RDS")
+
+```     
