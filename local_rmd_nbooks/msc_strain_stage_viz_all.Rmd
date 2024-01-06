@@ -1,0 +1,2622 @@
+---
+title: "msc_strn_stg_annotation"
+date: "2023-07-05"
+author: 'Jesse Rop'
+output:
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(sctransform)
+  library(rgl)
+  library(patchwork)
+  library(ggrepel)
+  library(ggpubr)
+  library(dplyr) 
+  library(stringr)
+  library(purrr)
+  library(readr)
+  library(tibble)
+  library(ggplot2)
+  library(ggnewscale)
+  library(tidyr)
+  library(cowplot)
+  library(scDblFinder)
+  library(SeuratData)
+  library(SeuratDisk)
+  library(scmap)
+  library(SingleCellExperiment)
+  library(pheatmap)
+  library(plotly)
+  library(Hmisc)
+  library(rmarkdown)
+  library(RColorBrewer)
+  # library(MAST)
+  library(Platypus)
+  library(ggvenn)
+  library('biomaRt')
+  library(conflicted)
+  library(SoupX)
+  library(MetBrewer)
+  library(knitr)
+  library(readxl)
+  library(SCpubr)
+  library(ggh4x)
+  library(gganimate)
+  conflict_prefer("select", "dplyr")
+  conflict_prefer("filter", "dplyr")
+  conflict_prefer("rename", "dplyr")
+})
+```
+
+
+# MSC annotation
+
+## Variable declarations, read in input files and exploratory visualizations
+
+
+```{r}
+
+sp_colors_names <- c('Early ring'='#D1EC9F',
+                     'Late ring'='#78C679',
+                     'Early trophozoite'='#FEEEAA',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                     'Gametocyte (developing)'='thistle',
+                     'Gametocyte (female)'='#551A8B',
+                     'Gametocyte (male)'='mediumpurple',
+                     'Unassigned' = 'red')
+sp_color_values <- c('Early ring'='#D1EC9F',
+                     'Late ring'='#78C679',
+                     'Early trophozoite'='#FEEEAA',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                     'Gametocyte (developing)'='thistle',
+                     'Gametocyte (female)'='#551A8B',
+                     'Gametocyte (male)'='mediumpurple',
+                     'Failed QC' = 'grey')
+
+sp_colors_jc <- c('Early ring'='#D1EC9F',
+                     'Late ring'='#78C679',
+                     'Early trophozoite'='#FEEEAA',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                     'Gametocyte (developing)'='thistle',
+                     'Gametocyte (female)'='#551A8B',
+                     'Gametocyte (male)'='mediumpurple',
+                  'Failed QC' = 'grey')
+
+sp_colors <- c('Early ring'='#D1EC9F',
+                     'Late ring'='#78C679',
+                     'Early trophozoite'='#FEEEAA',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                     'Gametocyte (developing)'='thistle',
+                     'Gametocyte (female)'='#551A8B',
+                     'Gametocyte (male)'='mediumpurple',
+               'Unassigned'='red', 
+               'Not assigned'='#D6CFC7',
+               'Female (LE)'='#208cf7',
+               # 'Female (HE)'='#551A8B',
+               'Female'='#551A8B',
+               'Male (LE)'='#a894d1',
+               'Male'='mediumpurple',
+               # 'Male (HE)'='mediumpurple',
+               'Failed QC' = 'grey',
+               'Gametocyte (committed)' = '#C399A2', 
+               'Gametocyte (developing)' = '#66444C', 
+               'Gametocyte (branching)' = '#66444C', 
+               'Gametocyte (early female)' = '#749E89', 
+               'Gametocyte (early male)' = '#7D87B2', 
+               'Gametocyte (late female)' = '#4E6D58', 
+               'Gametocyte (late male)' = '#41507B'
+)
+
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   # 'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   'Female'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   # 'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Male'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Atlas' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle'
+)
+cluster_cols <- brewer.pal(7, name = 'Set2') %>% set_names(as.character(c(0:6)))
+
+
+
+stg_lvls = c("Early ring", "Late ring", "Early trophozoite","Late trophozoite" , "Early schizont", "Late schizont",  "Gametocyte (developing)", "Female (HE)", "Female", "Female (LE)",  "Gametocyte (female)", "Male (HE)", "Male", "Male (LE)", "Gametocyte (male)", "Unassigned", "Failed QC", "Not assigned")
+
+# stg_refnd_lvls = c("Early ring", "Late ring", "Early trophozoite", "Late trophozoite", "Early schizont", "Late schizont", "Gametocyte (committed)", "Gametocyte (developing)", "Gametocyte (branching)", "Female (LE)", "Female (HE)", "Gametocyte (early female)", "Gametocyte (late female)", "Male (LE)", "Male (HE)", "Gametocyte (early male)", "Gametocyte (late male)", "Unassigned", "Failed qc", "Not assigned", "Atlas")
+
+stg_refnd_lvls = c("Early ring", "Late ring", "Early trophozoite", "Late trophozoite", "Early schizont", "Late schizont", "Gametocyte (committed)", "Gametocyte (developing)", "Gametocyte (branching)", "Female (HE)", "Female","Female (LE)", "Gametocyte (female)", "Gametocyte (early female)", "Gametocyte (late female)", "Gametocyte (male)", "Male (HE)", "Male", "Male (LE)", "Gametocyte (early male)", "Gametocyte (late male)", "Unassigned", "Failed qc", "Not assigned", "Atlas")
+
+stg_refnd_lvls2 = c('Early ring','Late ring','Early trophozoite','Late trophozoite','Early schizont','Late schizont', "Gametocyte (committed)","Gametocyte (developing)","Gametocyte (branching)", "Female (HE)","Female", "Female (LE)", "Gametocyte (early female)","Gametocyte (late female)", "Male (HE)",  "Male","Male (LE)", "Gametocyte (early male)","Gametocyte (late male)", "Unassigned", "Failed QC", "Not assigned") #%>% str_to_sentence(.)
+
+# stg_refnd_lvls_scmap = c('Early ring','Late ring','Early trophozoite','Late trophozoite','Early schizont','Late schizont', "Gametocyte (committed)","Gametocyte (developing)","Gametocyte (branching)","Gametocyte (early female)","Gametocyte (late female)","Gametocyte (early male)","Gametocyte (late male)", "Unassigned", "Failed QC", "Not assigned") %>% str_to_sentence(.)
+# 
+
+# stg_no_qc_lvls = c("Late ring", "Early trophozoite", "Female (LE)", "Female (HE)", "Gametocyte (male)", "Failed QC")
+```
+
+```{r pressure, echo=FALSE}
+# ggplot(cars, aes(x= dist, y =speed)) +
+#   geom_point()
+# graph2ppt(file = '/Users/jr35/Google Drive/My Drive/PHD_documents/test_exp2')
+```
+
+```{r}
+##Strain cluster colours
+
+strain_cols_n <-c("#910000", "#ff1a8d", "#007c71", "#0ea300", "#00deca", "#9a96c7", "#5d57a4", "#a8875b","#708db3", "#c39a00", "#ffd94d", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","thistle","#a40000" , "#00b7a7", "#e7f1f9", 'black', '#d9f0f8', 'grey')
+#, 'lavender', 'lightgray', 'grey'
+names(strain_cols_n) <- c('SC2', 'SC1','SC5',  'SC4', 'SC3',  'SC6', 'SC7', 'SC8', 'S3_S1', 'S1_p_i','S1_b', 'S2_b', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'SC1_3i','Negative', 'Lab', 'Less5', 'Other', NA)
+
+
+# strain_cols <- c(met.brewer(name = 'Austria')[c(1,7, 4,5,6, 7, 8)], 'light gray')
+strain_cols <- c(met.brewer(name = 'Thomas')[c(1:8)],'black', 'light gray')
+# names(strain_cols) = c('Strain 0', 'Strain 1', 'Strain 2', 'Doublet', 'Negative')
+names(strain_cols) = c('G1', 'G2', 'G3', 'G4','G5', 'G6','G7', 'G8', 'Doublet', 'Negative')
+# strain_cols = c("Strain 2" = "#dd5129", "Strain 1"= "#0f7ba2", "Strain 0"="#43b284", "Doublet"="#fab255")
+strain_cols =c(strain_cols,strain_cols_n)
+
+strain_dset_lvls = c( 'SC1', 'SC2','SC3',  'SC4', 'SC5',  'SC6', 'SC7', 'SC8')
+donor_cols = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" )))
+
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali')
+```
+
+
+initialize variable for the sample names
+
+```{r}
+# sample_id <- c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" )
+sample_name_nms <-as.list(c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" ) %>% 
+                          str_sort(., numeric = T))
+sample_name_nms <- sample_name_nms[1:4]
+
+## mitochondrial percent filt
+mt_filt <- c(5,1.2,1,0.45,2)
+mt_filt <- mt_filt[1:4]
+
+sample_id_lst <-as.list(c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" ) %>% 
+                          str_sort(., numeric = T))
+
+
+##Optimum clusters
+optimum_k = c(5,2,2,8) %>% set_names(sample_name_nms[1:4])
+```
+
+
+```{r}
+## !!! ONLY KEEP MSC14 IN THE LIST - WILL NEED TO BE UNDONE IN FUTURE
+
+```
+
+```{r}
+##Read quality controled msc objects with doublets and poor quality cell filtered out
+msc_qcd_anotd <- readRDS('data/processed/DB52e_star/msc_qcd_anotd.RDS') %>% .[1:4]
+# strn_c_new_mdata_m21 <- readRDS("data/processed/strn_c_new_mdata_m21.RDS")
+```
+
+```{r}
+## Genotype/strain PCA clustering and labeling with stage annotations
+
+##read in msc2021 souporcell PCAs
+soupo_PCA_df <- readRDS("data/processed/DB52e_star/soupo_PCA_m21.RDS") 
+names(soupo_PCA_df) <- str_to_upper(names(soupo_PCA_df))
+
+soupo_PCA_df <- soupo_PCA_df %>%
+  .[paste0(sample_name_nms[1:4], "_", optimum_k)] %>%
+  map(~.x$rotation %>% 
+     as.data.frame() %>%
+     rownames_to_column('bcode') %>%
+       rename_with(~paste0("sc_", .), contains("PC"))
+  )
+
+##read in MSC14 souporcell PCAs
+# soupo_msc14_PCA_df <- readRDS('data/processed/soupo_kselect_PCA.RDS') %>% .[9] %>%
+#   map(~.x$rotation %>% 
+#      as.data.frame() %>%
+#      rownames_to_column('bcode') %>%
+#        rename_with(~paste0("sc_", .), contains("PC"))
+#   )
+# 
+# soupo_PCA_df <- c(soupo_m21_PCA_df, soupo_msc14_PCA_df)
+
+```
+
+
+```{r}
+##Add qcd strain information to the msc 1,3 and 13 samples
+
+# msc.1.3.13_qcd_anotd_strn <- list(strn_c_new_mdata_m21, paste0("Strain_", sample_name_nms[1:3],"_", optimum_k), msc_m21_qcd_anotd_strnPC[1:3]) %>% 
+#   pmap(., ~{
+#   ..1 %>% 
+#       dplyr::select(bcode, strain, ..2, stage_afm, stage_ag) %>%
+#       rename("strain_qcd" = strain) %>%
+#       rename("strain" = !!rlang::sym(..2)) %>%
+#       column_to_rownames('bcode') %>%
+#       AddMetaData(..3, .)
+# })
+
+```
+
+```{r}
+##Add msc14 which was annotated differently to the mali 2021 set and add souporcell PCs
+
+# msc_m21_qcd_anotd_strnPC <- c(msc.1.3.13_qcd_anotd_strn, msc_m21_qcd_anotd_strnPC[4])
+
+msc_m21_qcd_anotd_strnPC <- list(soupo_PCA_df, msc_qcd_anotd) %>% 
+  pmap(., ~{
+  ..1 %>% 
+      column_to_rownames('bcode') %>%
+      AddMetaData(..2, .)
+})
+
+```
+
+```{r, message=FALSE}
+##Metadata from all p.falciparum genes downloaded from plasmoDB
+Pf3D7_genes_plasmoDB <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3d7_Genes_Summary_270922.csv") %>% 
+  dplyr::rename("gene_id" = `Gene ID` ) %>% 
+  group_by(gene_id) %>% 
+  add_count(name='gn_iso') %>% 
+  ungroup() %>%
+  mutate(across(gene_id, ~case_when(gn_iso>1 ~ source_id,
+                                    TRUE ~ as.character(.)))) %>% 
+  mutate(across(gene_id, ~str_replace(.,"_", "-")))%>%
+  dplyr::rename('Gene_name' = `Gene Name or Symbol`, 'Ka_Ks' = `NonSyn/Syn SNP Ratio All Strains`, 'TM_domains'=`# TM Domains`) %>% 
+  mutate(across(where(is.character), ~na_if(., "N/A")),
+         Gene = coalesce(`Gene_name`, gene_id) )  %>%
+  group_by(Gene) %>% 
+  add_count() %>% 
+  ungroup() %>%
+  dplyr::mutate(across(Gene, ~case_when(n>1 ~ paste0(.,'_', gene_id),
+                                        TRUE ~ as.character(.)))) 
+
+```
+
+
+
+### PCA genotype clustering of MSCs coloured by stage {.tabset}
+
+```{r, results='asis'}
+# list(soupo_kselect_PCA[2:5],msc_m21_qcd_anotd_strnPC[2:5],names(soupo_kselect_PCA[2:5]))  %>%
+list(msc_m21_qcd_anotd_strnPC, names(msc_m21_qcd_anotd_strnPC), c(3,3,3,3))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+      a=..1@meta.data %>%
+      ggplot(., aes(x = sc_PC1, y = !!rlang::sym(paste0("sc_PC", ..3)), color = stageHL)) +
+      scale_color_manual(values = sp_fld_colors) +
+      geom_point() +
+      theme_classic() +
+      theme(
+        axis.text = element_text(size = 18),
+        axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20, face = "bold")
+      ) +
+      guides(color = guide_legend(override.aes = list(size = 3.5)))
+    
+    print(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+### PCA genotype clustering of MSCs coloured by stageHL {.tabset}
+
+```{r, results='asis'}
+# list(soupo_kselect_PCA[2:4],msc_m21_qcd_anotd_strnPC[2:4],names(soupo_kselect_PCA[2:4]))  %>%
+list(msc_m21_qcd_anotd_strnPC, names(msc_m21_qcd_anotd_strnPC), c(3,3,3,3))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+      a=..1@meta.data %>%
+      ggplot(., aes(x = sc_PC1, y = !!rlang::sym(paste0("sc_PC", ..3)), color = Strain_DN)) +
+      scale_color_manual(values = strain_cols) +
+      geom_point(size = 2) +
+      theme_classic() +
+      theme(
+        axis.text = element_text(size = 18),
+        axis.title = element_text(size = 20, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold")
+      ) +
+      guides(color = guide_legend(override.aes = list(size = 4)))
+    
+    print(a)
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+
+
+    
+```{r, results='asis'}
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC, names(msc_m21_qcd_anotd_strnPC), c(3,3,3,3))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      left_join(.,..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(across(stageHL, ~case_when(is.na(.) ~ 'Failed QC',
+                                        T ~ as.character(stageHL)))) %>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls2)))) %>%
+      arrange(stageHL) %>%
+      rename('Stage' = stageHL) %>%
+      ggplot(., aes(x = sc_PC1, y = !!rlang::sym(paste0("sc_PC", ..4)), color = Stage)) +
+      scale_color_manual(values = sp_fld_colors) +
+      geom_point(size = 1) +
+      theme_classic() +
+      theme(
+        axis.text = element_text(size = 18),
+        axis.title = element_text(size = 20, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold")
+      ) +
+      guides(color = guide_legend(override.aes = list(size = 4)))
+    
+    print(a)
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+
+```{r, fig.width = 12, fig.height = 4.5, message=FALSE, warning=FALSE}
+
+
+stg_strn_distb_bar<-list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>% 
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%  
+      dplyr::count(Strain_DN, stageHL, .drop = FALSE)  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n))
+  
+  a_tbl %>%
+      print.data.frame()  
+  
+    a_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts/100, fill = Stage)) +
+  geom_col() +
+  geom_tile(aes(x = Stage, y = -(10/100), fill = Stage, height = 7/100)) +
+  scale_fill_manual(values =  sp_fld_colors, guide = guide_legend( direction = "horizontal"  ))+
+  geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 4.8, show.legend = F, fontface = 'bold')+
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.2))) +
+  scale_x_discrete(expand = expansion(add = c(1.2, 0.8))) +
+  facet_grid(.~Strain_DN) +
+  theme_classic() +
+  labs( y = 'Counts (X100)')+
+      theme(
+        axis.text.y  = element_text(size = 15),
+        axis.title.y  = element_text(size = 16, face = "bold"),
+        axis.title.x = element_blank(),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=18,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+      ) +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+    # guides(fill = guide_legend( nrow = 2))
+    # b_plt
+})
+
+stg_strn_distb_bar
+
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+# saveRDS(stg_strn_distb_bar, "plots/figS26/stg_strn_distb_bar.RDS")
+```
+
+
+```{r, fig.width = 12, fig.height = 4.5, message=FALSE, warning=FALSE}
+
+
+stg_strn_distb_bar<-list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>% 
+    # filter(str_detect(stageHL)) %>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%  
+      dplyr::count(Strain_DN, stageHL, .drop = FALSE)  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n))
+  
+  a_tbl %>%
+      print.data.frame()  
+  
+    a_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts/100, fill = Stage)) +
+  geom_col() +
+  geom_tile(aes(x = Stage, y = -(10/100), fill = Stage, height = 7/100)) +
+  scale_fill_manual(values =  sp_fld_colors, guide = guide_legend( direction = "horizontal"  ))+
+  geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 4.8, show.legend = F, fontface = 'bold')+
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.2))) +
+  scale_x_discrete(expand = expansion(add = c(1.2, 0.8))) +
+  facet_grid(.~Strain_DN) +
+  theme_classic() +
+  labs( y = 'Counts (X100)')+
+      theme(
+        axis.text.y  = element_text(size = 15),
+        axis.title.y  = element_text(size = 16, face = "bold"),
+        axis.title.x = element_blank(),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=18,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+      ) +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+    # guides(fill = guide_legend( nrow = 2))
+    # b_plt
+})
+
+stg_strn_distb_bar
+
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+# saveRDS(stg_strn_distb_bar, "plots/figS26/stg_strn_distb_bar.RDS")
+```
+
+
+```{r, fig.width = 14, fig.height = 3, message=FALSE, warning=FALSE}
+ don_data <- map(msc_m21_qcd_anotd_strnPC, ~.x@meta.data) %>%
+  bind_rows(., .id = "donor") %>%
+    mutate(across(donor, ~str_remove(., "_.*$")),
+           across(donor, ~factor(., levels = as.character(sample_id_lst[1:4])))
+           )
+
+le_tbl <- don_data%>%
+  filter(donor != 'MSC1') %>%
+  filter(stage_afm != 'Asexual') %>%
+  filter(stageHL != 'Gametocyte (male)') %>%
+  mutate(across(donor, ~droplevels(factor(., levels = sample_name_nms))))  %>%  
+  mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%  
+      dplyr::count(donor,Strain_DN, stageHL, .drop = T)  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n))
+  
+##get stage_ag counts
+ls_bar_dist <- le_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts/100, fill = Stage)) +
+  geom_col() +
+  geom_tile(aes(x = Stage, y = -(10/100), fill = Stage, height = 7/100)) +
+  scale_fill_manual(values =  sp_fld_colors, guide = guide_legend( direction = "horizontal"  ))+
+  geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 4.4, show.legend = F)+
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.2))) +
+  scale_x_discrete(expand = expansion(add = c(1.2, 0.8))) +
+  # facet_grid(.~Strain_DN) +
+  ggh4x::facet_nested_wrap(vars(donor, Strain_DN),  nrow = 1, scales = "free_x") +
+  theme_classic() +
+  labs( y = 'Counts (X100)')+
+      theme(
+        axis.text.y  = element_text(size = 14),
+        axis.title.y  = element_text(size = 14),
+        axis.title.x = element_blank(),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=15, colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+      ) +
+    guides(fill = guide_legend( nrow = 1, title.position = "left"))
+
+ls_bar_dist
+```
+```{r, fig.width = 12, fig.height = 4.5, message=FALSE, warning=FALSE}
+saveRDS(ls_bar_dist, "plots/figS26/ls_bar_dist.RDS")
+```
+
+```{r, fig.width = 12, fig.height = 4.5, message=FALSE, warning=FALSE}
+le_corr_venn_upset <- readRDS("plots/figS26/le_corr_venn_upset.RDS")
+```
+
+```{r, fig.width = 12, fig.height = 11, message=FALSE, warning=FALSE}
+plot_grid(ls_bar_dist,
+          le_corr_venn_upset,
+          nrow = 2,
+          rel_heights = c(.25,.75),
+          labels = c("A",""),
+          label_size = 24)
+```
+
+```{r, fig.width = 12, fig.height = 4.5, message=FALSE, warning=FALSE}
+
+
+stg_cl_strn_distb_bar<-list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>% 
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%  
+      dplyr::count(Strain_DN, old_seu_cluster, .drop = FALSE)  %>%
+      rename(c('Cluster' = old_seu_cluster, 'Counts' =n))
+  
+  a_tbl %>%
+      print.data.frame()  
+  
+    a_tbl %>%
+      ggplot(., aes(x = Cluster, y = Counts/100, fill = Cluster)) +
+  geom_col() +
+  geom_tile(aes(x = Cluster, y = -(10/100), fill = Cluster, height = 7/100)) +
+  scale_fill_manual(values =  cluster_cols, guide = guide_legend( direction = "horizontal"  ))+
+  geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 4.8, show.legend = F, fontface = 'bold')+
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.2))) +
+  scale_x_discrete(expand = expansion(add = c(1.2, 0.8))) +
+  facet_grid(.~Strain_DN) +
+  theme_classic() +
+  labs( y = 'Counts (X100)')+
+      theme(
+        axis.text.y  = element_text(size = 15),
+        axis.title.y  = element_text(size = 16, face = "bold"),
+        axis.title.x = element_blank(),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=18,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+      ) +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+    # guides(fill = guide_legend( nrow = 2))
+    # b_plt
+})
+
+stg_cl_strn_distb_bar
+
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+# saveRDS(stg_strn_distb_bar, "plots/figS26/stg_strn_distb_bar.RDS")
+```
+
+```{r, results='asis'}
+##Remove doublets and negatives
+# msc_m21_qcd_anotd_strnPC <- map(msc_m21_qcd_anotd_strnPC, ~subset(.x, subset = Strain_DN !='Doublet'))
+msc_m21_qcd_anotd_strnPC <- map(msc_m21_qcd_anotd_strnPC, ~subset(.x, subset = Strain_DN !='Negative' & !is.na(Strain_DN) & Strain_DN !='Doublet'))
+
+```
+
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+list(rep(msc_m21_qcd_anotd_strnPC[1:4], 2), rep(sample_id_lst[1:4], 2), c(rep(2,4), rep(3,4)))  %>% 
+  purrr::pmap(.,~{
+    # create tabset for each group 
+    cat('##### ',..2,'   \n')
+    p_umap <- DimPlot(., reduction = "umap", group.by = 'stageHL', dims = c(1, ..3),
+                cols = sp_fld_colors , pt.size = 1,  label = F, repel = T, label.size = 6 ,
+                )  + 
+      labs(title = ..2)+
+      theme(axis.text=element_text(size=18), 
+            axis.title=element_text(size=20,face="bold"), 
+            # legend.text = element_blank(), 
+            # plot.title = element_blank(),
+            strip.text.x = element_text(size = 24, face = "bold") )
+    print(p_umap)
+    cat("\n")
+  })
+
+```
+
+```{r, fig.width = 12, fig.height = 4.5, message=FALSE, warning=FALSE}
+
+stg_strn_distb_bar<-list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>% 
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%  
+      dplyr::count(Strain_DN, stageHL, .drop = FALSE)  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n))
+  
+  a_tbl %>%
+      print.data.frame()  
+  
+    a_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts/100, fill = Stage)) +
+  geom_col() +
+  geom_tile(aes(x = Stage, y = -(10/100), fill = Stage, height = 7/100)) +
+  scale_fill_manual(values =  sp_fld_colors, guide = guide_legend( direction = "horizontal"  ))+
+  geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 4.8, show.legend = F, fontface = 'bold')+
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.2))) +
+  scale_x_discrete(expand = expansion(add = c(1.2, 0.8))) +
+  facet_grid(.~Strain_DN) +
+  theme_classic() +
+  labs( y = 'Counts (X100)')+
+      theme(
+        axis.text.y  = element_text(size = 15),
+        axis.title.y  = element_text(size = 16, face = "bold"),
+        axis.title.x = element_blank(),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=18,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+      ) +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+    # guides(fill = guide_legend( nrow = 2))
+    # b_plt
+})
+
+stg_strn_distb_bar
+
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+# saveRDS(stg_strn_distb_bar, "plots/figS26/stg_strn_distb_bar.RDS")
+```
+
+##Save the strain annotated objects - !!!!!!NB - NEED to arrange in order
+```{r, results='asis'}
+##Remove doublets and negatives
+# names(msc_m21_qcd_anotd_strnPC) <- str_remove(names(msc_m21_qcd_anotd_strnPC), "_.")
+# saveRDS( , "data/processed/DB52e_star/msc_m21_qcd_anotd_strnPC.RDS")
+  
+```
+
+```{r, results='asis'}
+##Remove doublets and negatives
+# names(msc_m21_qcd_anotd_strnPC) <- str_remove(names(msc_m21_qcd_anotd_strnPC), "_.")
+# saveRDS( , "data/processed/DB52e_star/msc_m21_qcd_anotd_strnPC.RDS")
+  
+```
+### PCA genotype clustering of MSCs coloured by stageHL retaining only QCd cells {.tabset}
+
+
+```{r, results='asis'}
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC, names(soupo_PCA_df), c(3,3,3,3))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      left_join(.,..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(across(stageHL, ~case_when(is.na(.) ~ 'Failed QC',
+                                        T ~ as.character(stageHL)))) %>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls2)))) %>%
+      arrange(stageHL) %>%
+      rename('Stage' = stageHL) %>%
+      ggplot(., aes(x = sc_PC1, y = !!rlang::sym(paste0("sc_PC", ..4)), color = Stage)) +
+      scale_color_manual(values = sp_fld_colors) +
+      geom_point(size = 2) +
+      theme_classic() +
+      theme(
+        axis.text = element_text(size = 16),
+        axis.title = element_text(size = 16, face = "bold"),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.position="bottom",
+        # legend.margin=margin(unit(c(1,3,1,3),"cm"))
+      )+
+      # coord_fixed() +
+      guides(color = guide_legend(override.aes = list(size = 1.5), nrow = 2,title.position = "top"))
+    
+    print(a)
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+  })
+
+# filter(str_detect(stageHL, 'ale')) %>%
+#       mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls)))) %>%
+      
+```
+
+
+
+```{r, results='asis'}
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC, names(soupo_PCA_df), c(3,3,3,3))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      left_join(.,..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(across(stageHL, ~case_when(is.na(.) ~ 'Failed QC',
+                                        T ~ as.character(stageHL)))) %>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls2)))) %>%
+      filter(str_detect(stageHL, 'male')) %>%
+      arrange(stageHL) %>%
+      rename('Stage' = stageHL) %>%
+      ggplot(., aes(x = sc_PC1, y = !!rlang::sym(paste0("sc_PC", ..4)), color = Stage)) +
+      scale_color_manual(values = sp_fld_colors) +
+      geom_point(size = 2.5) +
+      theme_classic() +
+      theme(
+        axis.text = element_text(size = 20),
+        axis.title = element_text(size = 20, face = "bold"),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20, face = "bold")#,
+        # legend.position="bottom",
+        # legend.margin=margin(unit(c(1,3,1,10),"cm"))
+      )#+
+      # coord_fixed() #+
+      # guides(color = guide_legend(override.aes = list(size = 2), nrow = 2,title.position = "top"))
+    
+    print(a)
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+
+
+
+Add stage labels collapsing asexuals and gams and number of cells per coarse group
+```{r}
+##Add the number per xluster as a column in metadata
+
+# msc_m21_qcd_anotd_strnPC <- map(msc_m21_qcd_anotd_strnPC, ~.x@meta.data %>% 
+#         rownames_to_column('bcodes') %>%
+#         mutate(stage_afm = case_when(str_detect(stageHL, 'ring|troph') ~ 'Asexual', str_detect(stageHL, 'Male') ~ 'Male', str_detect(stageHL, 'Female') ~ 'Female'))%>% 
+#         mutate(stage_ag = case_when(str_detect(stageHL, 'ring|troph') ~ 'Asexual', str_detect(stageHL, 'ale') ~ 'Gametocyte'))  %>%
+#         dplyr::add_count(Strain_DN, stage_ag, name = 'strain_ag_n') %>% 
+#         dplyr::add_count(Strain_DN, stage_afm, name = 'strain_afm_n') %>%
+#         dplyr::select(bcodes, stage_afm, stage_ag, strain_ag_n, strain_afm_n) %>% 
+#           column_to_rownames('bcodes') %>% 
+#           AddMetaData(..1, .)) 
+
+map(msc_m21_qcd_anotd_strnPC, ~.x@meta.data %>% 
+      filter(strain_afm_n < 20) %>%
+      dplyr::count(Strain_DN, stage_ag) 
+)
+
+```
+
+Add stage labels collapsing asexuals and gams and number of cells per coarse group
+```{r}
+##Add the number per xluster as a column in metadata
+map(msc_m21_qcd_anotd_strnPC, ~.x@meta.data %>% 
+      filter(strain_afm_n < 4) %>%
+      dplyr::count(Strain_DN, stage_afm) 
+)
+
+```
+
+
+
+```{r, fig.width = 12, fig.height = 4.5, message=FALSE, warning=FALSE}
+
+
+stg_strn_distb_bar<-list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>% 
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%  
+      dplyr::count(Strain_DN, stageHL, .drop = FALSE)  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n))
+  
+  a_tbl %>%
+      print.data.frame()  
+  
+    a_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts/100, fill = Stage)) +
+ # ggplot(., aes(y = probabilities, x = `Machine learning predictions`, fill = `Machine learning predictions`)) +
+  geom_col() +
+  # geom_point(aes(group=Stage), size = 0.7, position = position_jitterdodge())+
+  geom_tile(aes(x = Stage, y = -(10/100), fill = Stage, height = 7/100)) +
+  scale_fill_manual(values =  sp_fld_colors, guide = guide_legend( direction = "horizontal"  ))+
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+  geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 4.8, show.legend = F, fontface = 'bold')+
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.2))) +
+  scale_x_discrete(expand = expansion(add = c(1.2, 0.8))) +
+  facet_grid(.~Strain_DN) +
+  theme_classic() +
+  labs( y = 'Counts (X100)')+
+      theme(
+        axis.text.y  = element_text(size = 15),
+        axis.title.y  = element_text(size = 16, face = "bold"),
+        # axis.title.x = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=18,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+        # legend.margin=margin(t = 0, unit='cm')
+      ) +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+    # guides(fill = guide_legend( nrow = 2))
+    # b_plt
+})
+
+stg_strn_distb_bar
+
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+saveRDS(stg_strn_distb_bar, "plots/figS26/stg_strn_distb_bar.RDS")
+```
+
+```{r, fig.width = 7, fig.height = 4, message=FALSE, warning=FALSE}
+
+
+list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>%
+      mutate(Stage= stage_ag) %>%
+      mutate(across(Stage, ~factor(., levels=c('Asexual', 'Gametocyte')))) %>%
+      dplyr::count(Strain_DN, Stage, .drop = FALSE) %>% 
+      rename(c('Counts' =n, 'Strain' = Strain_DN)) 
+  
+
+    b_plt <- a_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 5, show.legend = F)+
+      scale_fill_manual(values = c('Asexual' = "#FFE5B4", 'Gametocyte' = "#008080")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 7)) +
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+  facet_wrap( Strain ~ ., nrow = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+        # legend.margin=margin(t = 0, unit='cm')
+      )
+    b_plt
+})
+
+
+```
+
+
+```{r, fig.width = 7, fig.height = 4, message=FALSE, warning=FALSE}
+
+
+list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>%
+      mutate(Stage= stage_ag) %>%
+      mutate(across(Stage, ~factor(., levels=c('Asexual', 'Gametocyte')))) %>%
+      dplyr::count(Strain_DN, Stage, .drop = FALSE) %>% 
+      rename(c('Counts' =n, 'Strain' = Strain_DN)) 
+  
+
+    b_plt <- a_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 5, show.legend = F)+
+      scale_fill_manual(values = c('Asexual' = "#FFE5B4", 'Gametocyte' = "#008080")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 7)) +
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+  facet_wrap( Strain ~ ., nrow = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+        # legend.margin=margin(t = 0, unit='cm')
+      )
+    b_plt
+})
+
+
+```
+
+```{r, fig.height=3.5, fig.width=12}
+# strain_cc_nms <- c('Strain_k4_cc', 'Strain_k6_cc', 'Strain_k4_s2_cc', 'Strain_k4_s3_cc', 'Strain_k6_cln_cc', 'Strain_k3_asex_cc', 'Strain_k4_asex_cc', 'Strain_k5_asex_cc', 'Strain_k3_gam_cc', 'Strain_k4_gam_cc', 'Strain_k5_gam_cc')
+
+list(msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>%
+      mutate(across(stageHL, ~droplevels(factor(str_replace(., ' ', '\n'), levels = str_replace(stg_refnd_lvls, ' ', '\n'))))) %>%
+      ggplot(., aes(colour = Strain_DN, y = nFeature_RNA/1000, x = Strain_DN )) +
+      scale_color_manual(values = strain_cols_n)+
+      geom_boxplot(alpha = 0.5, position = position_dodge(width = 1)) +
+        geom_point(size = 0.7, position = position_dodge(width = 1))+ 
+      labs(color = 'Strain', y = 'Gene count (x1000)') +
+      facet_wrap( stageHL ~ ., nrow = 1) +
+      theme_classic() +
+      theme(axis.text = element_text(size = 18),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = 'bold'),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20, face = 'bold'),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=18,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')) 
+              
+})
+
+```
+
+```{r, results='asis'}
+# , fig.width=9.5
+
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN, Stage= stage_ag) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(Stage= stageHL) %>%
+      ggplot(., aes(x=sc_PC1, y=sc_PC3, group = Strain_DN, color = Stage)) + 
+      geom_point(size=2, aes(shape=Strain_DN)) +
+      scale_color_manual(values = sp_fld_colors) +
+      #scale_shape_manual(values = c('Asexual' = 6 , 'Male' = 3, 'Female' = 0)) +
+      scale_shape_manual(values = c('SC1' = 10, 'SC2' = 17, 'SC3' = 15, 'SC4' = 4, 'SC5' = 7, 'SC6' = 8, 'SC7' = 11, 'SC8' = 12)) +
+      theme_void()+
+      labs(shape = "Strain")+
+      theme(#axis.text=element_text(size=18), 
+            axis.text =element_blank(), 
+            # axis.title=element_text(size=18,face="bold"), 
+            axis.title =element_blank(),
+            legend.text = element_text(size=20), 
+            legend.title = element_text(size=20,face="bold"),
+            legend.position = "bottom",
+            legend.box = "horizontal",
+            legend.spacing.y = unit(0.01, "cm"))+ 
+      # coord_fixed()+
+      guides(color = "none",
+             shape = guide_legend( nrow = 2, title.position = "top",keywidth = unit(0.1, "cm"))) 
+    
+    print(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+```{r, results='asis', , fig.width = 7, fig.height = 6}
+# , fig.width=9.5
+
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.2, "cm")
+)
+
+sumap <- list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN,  stage_ag) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(Stage= stage_ag) %>%
+      rename("PC1" = sc_PC1, "PC3" = sc_PC3) %>%
+      ggplot(., aes(x=PC1, y=PC3, color = Strain_DN)) + 
+      geom_point(size=3.0) +
+      scale_color_manual(values = strain_cols_n) +
+      #scale_shape_manual(values = c('Asexual' = 6 , 'Male' = 3, 'Female' = 0)) +
+      labs(color = 'Strain') +
+      theme_classic()+
+      theme(legend.text = element_text(size=20), 
+            legend.title = element_text(size=20,face="bold"),
+            legend.position = 'bottom',
+            axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), color = 'black'),
+            axis.title = element_text(hjust = 0, size=16, face = 'bold'),
+            ) + 
+      guides(color = guide_legend(override.aes = list(size = 6.5), order = 1,nrow = 2, title.position = "top"),x= trunc_axis, y= trunc_axis) +
+      scale_x_continuous(breaks = NULL) +
+      scale_y_continuous(breaks = NULL)
+    
+    print(a)
+    return(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+
+```{r, results='asis', , fig.width = 7, fig.height = 6}
+
+sumap2 <-  purrr::map(c("SC2", "SC1", "SC5", "SC4", "SC3", "SC6", "SC7", "SC8"),  ~ {
+    # create tabset for each group
+    cat('####', .x, '   \n')
+
+    a = soupo_PCA_df[[4]] %>%
+      right_join(msc_m21_qcd_anotd_strnPC[[4]]@meta.data %>%
+                  dplyr::select(stageHL, Strain_DN,  stage_ag) %>%
+                  mutate(Strain = case_when(Strain_DN == .x ~ .x, T ~ "Other"),
+                         Strain = factor(Strain, levels=c(.x, "Other"))
+                         ) %>%
+                   rownames_to_column('bcode'),
+                by = 'bcode') %>%
+      arrange(desc(Strain)) %>%
+      mutate(Stage= stage_ag) %>%
+      ggplot(., aes(x=sc_PC1, y=sc_PC3, color = Strain)) + 
+      geom_point(size=8.0) +
+      scale_color_manual(values = strain_cols_n) +
+      labs(color = 'Strain') +
+      theme_void()+
+      theme(legend.text = element_text(size=20), 
+            legend.title = element_text(size=20,face="bold"),
+            legend.position = 'none',
+            axis.line = element_blank()
+            )
+    
+    print(a)
+    return(a)
+    cat('\n')
+    cat("\n")
+  })
+
+sumap2
+```
+
+```{r, results='asis', fig.width = 7, fig.height = 6}
+# , fig.width=9.5
+
+stg_col_sumap <- list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN,  stage_afm) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(`Stage (coarse)`= stage_afm) %>%
+      rename("PC1" = sc_PC1, "PC3" = sc_PC3) %>%
+      ggplot(., aes(x=PC1, y=PC3, color = `Stage (coarse)`)) + 
+      geom_point(size=3.0) +
+      scale_color_manual(values = c('Asexual' = "#D7B7C7", 'Male' = "#C4CAA4", 'Female'="#6289A9")) +
+      #scale_shape_manual(values = c('Asexual' = 6 , 'Male' = 3, 'Female' = 0)) +
+      labs(color = 'Stage')  +
+      theme_classic()+
+      theme(legend.text = element_text(size=20), 
+            legend.title = element_text(size=20,face="bold"),
+            legend.position = 'bottom',
+            axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), color = 'black'),
+            axis.title = element_text(hjust = 0, size=16, face = 'bold'),
+            ) + 
+      guides(color = guide_legend(override.aes = list(size = 6.5), order = 1,nrow = 1, title.position = "top"),x= trunc_axis, y= trunc_axis) +
+      scale_x_continuous(breaks = NULL) +
+      scale_y_continuous(breaks = NULL)
+    
+    print(a)
+    return(a)
+    cat('\n')
+    cat("\n")
+  })
+
+stg_col_sumap
+```
+
+
+```{r}
+
+ss_anim <- list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                   dplyr::select(stageHL, Strain_DN,  stage_afm) %>% 
+                   rownames_to_column('bcode'), 
+               by = 'bcode') %>%
+    mutate(`Stage (coarse)`= stage_afm)  %>%
+    left_join(., ..2@reductions$umap@cell.embeddings %>%
+                  as.data.frame() %>%
+                  dplyr::select(UMAP_1, UMAP_2 ) %>% 
+                  mutate(across(starts_with('UMAP'), ~.x/20)) %>% ## Get the maximum PCA divided by maximum UMAP for each dimension and find average of the 2 and adjust
+                  rownames_to_column('bcode'), by = 'bcode') %>%
+    pivot_longer(cols = starts_with(c('sc_PC1','sc_PC3', 'UMAP')), names_pattern = "(.*)(1|2)", names_to = c( "dimensions", ".value"))  %>% 
+      mutate(stg_strn = case_when(dimensions == 'sc_PC' ~ Strain_DN,dimensions == 'UMAP_' ~ stageHL ),
+             state = case_when(dimensions == 'sc_PC' ~ 'Strain',dimensions == 'UMAP_' ~ 'Stage' )) %>% 
+      ggplot(., aes(x=`1`, y=`2`, color = stg_strn, group = bcode)) + 
+    geom_point(size=3.5) +
+    scale_color_manual(values = c(strain_cols_n, sp_fld_colors)) +
+    theme_classic() +
+    theme(#axis.text=element_text(size=18), 
+        axis.text=element_blank(), 
+        #axis.title=element_text(size=18,face="bold"), 
+        axis.title=element_blank(),
+        axis.ticks =element_blank(),
+        legend.text = element_text(size=30), 
+        legend.title = element_text(size=30,face="bold"),
+            plot.title = element_text(size=30,face="bold"),
+        axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), color = 'black'),
+        plot.margin = margin(l=0.5,t=0.5,r=0.5,b=0.5, unit = "cm")) + 
+    guides(color = guide_legend(override.aes = list(size = 5.5)), x= trunc_axis, y= trunc_axis) +
+      theme()  +
+      scale_x_continuous(breaks = NULL) +
+      scale_y_continuous(breaks = NULL)+
+    transition_states(
+        state,
+        transition_length = 3,
+        state_length = 5
+    ) +
+      labs(title = '{closest_state}', color = 'Stage/Strain')
+  })
+    
+anim_save("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/ss_anim.gif", ss_anim[[1]], fps = 10)
+ss_anim_twtr<-animate(ss_anim[[4]], height = 512, width =1024)
+anim_save("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/ss_anim_twtr.gif", ss_anim_twtr, fps = 10)
+
+```
+
+
+```{r}
+
+ss_afm_anim <- list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN,  stage_afm) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(`Stage (coarse)`= stage_afm)  %>%
+    left_join(.,..2@reductions$umap@cell.embeddings %>%
+                  as.data.frame() %>%
+                  dplyr::select(UMAP_1, UMAP_2 ) %>% 
+                  mutate(across(starts_with('UMAP'), ~.x/200)) %>% ## Get the maximum PCA divided by maximum UMAP for each dimension and find average of the 2 and adjust
+                  rownames_to_column('bcode'), by = 'bcode') %>%
+    pivot_longer(cols = starts_with(c('sc_PC1','sc_PC2', 'UMAP')), names_pattern = "(.*)(1|2)", names_to = c( "dimensions", ".value"))  %>%
+      mutate(state = case_when(dimensions == 'sc_PC' ~ 'Strain',dimensions == 'UMAP_' ~ 'Stage' )) %>% 
+      ggplot(., aes(x=`1`, y=`2`, color = Strain_DN, shape = stage_afm)) + 
+      geom_point(size=2) +
+      scale_color_manual(values = strain_cols_n)  +
+      theme_classic() +
+      theme(#axis.text=element_text(size=18), 
+            axis.text=element_blank(), 
+            #axis.title=element_text(size=18,face="bold"), 
+            axis.title=element_blank(),
+            axis.ticks =element_blank(),
+            legend.text = element_text(size=22), 
+            legend.title = element_text(size=22,face="bold"),
+            plot.title = element_text(size=22,face="bold"),
+        axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), color = 'black')) + 
+      guides(color = guide_legend(override.aes = list(size = 3.5)), x= trunc_axis, y= trunc_axis) +
+       transition_states(
+          state,
+          transition_length = 3,
+          state_length = 5
+        ) +
+      labs(title = '{closest_state}', color = 'Strain', shape = 'Stage')
+  })
+ss_afm_anim_twtr<-animate(ss_afm_anim[[1]], height = 512, width =1024)
+anim_save("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/ss_afm_anim.gif", ss_afm_anim[[1]], fps = 10)
+anim_save("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/ss_afm_anim_twtr.gif", ss_afm_anim_twtr, fps = 10)
+
+```
+
+
+```{r, fig.width = 7, fig.height = 4, message=FALSE, warning=FALSE}
+
+
+ss_bar_plt <-list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>%
+    filter(stage_afm != 'Asexual') %>%
+      mutate(across(stage_afm, ~factor(., levels=c('Female', 'Male')))) %>%
+      dplyr::count(Strain_DN, stage_afm, .drop = FALSE) 
+  
+  ##get stage_ag counts
+  stage_ag_cnt <- ..1@meta.data %>% dplyr::select(Strain_DN, stage_ag, stage_afm) %>% 
+    add_count(Strain_DN,stage_ag, name = 'stage_ag_n') %>% 
+    distinct(pick(Strain_DN, stage_afm), .keep_all = T) %>% 
+    left_join(a_tbl, ., by =c('Strain_DN', 'stage_afm')) %>% 
+    rename(c('Stage'= stage_afm, 'Counts' =n, 'Strain' = Strain_DN))  
+  
+  print(stage_ag_cnt)
+  
+
+    b_plt <- stage_ag_cnt %>%
+      # ggplot(., aes(x = Stage, y = Counts, fill = Stage, color=stage_ag_n<30)) +
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 7, show.legend = F, fontface ='bold', colour='black')+
+      scale_fill_manual(values = c('Asexual' = "#D7B7C7", 'Male' = "#C4CAA4", 'Female'="#6289A9")) + #'Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6"
+      # scale_color_manual(values = c('FALSE' = "white", 'TRUE' = "blue")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 14)) +
+  facet_wrap( Strain ~ ., nrow = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')
+      )+ 
+      guides(color = F)
+    print(b_plt)
+    return(b_plt)
+})
+
+
+```
+
+
+```{r, fig.width = 18, fig.height = 4, message=FALSE, warning=FALSE}
+ don_data <- map(msc_m21_qcd_anotd_strnPC, ~.x@meta.data) %>%
+  bind_rows(., .id = "donor") %>%
+    mutate(across(donor, ~str_remove(., "_.*$")),
+           across(donor, ~factor(., levels = as.character(sample_id_lst[1:4])))
+           )
+
+a_tbl <- don_data%>%
+  # filter(stage_afm != 'Asexual') %>%
+      mutate(across(stage_afm, ~factor(., levels=c('Asexual', 'Female', 'Male')))) %>%
+      dplyr::count(donor, Strain_DN, stage_afm, .drop = FALSE) 
+
+##get stage_ag counts
+stage_ag_cnt <- don_data %>%
+  dplyr::select(donor,Strain_DN, stage_ag, stage_afm) %>% 
+    add_count(donor,Strain_DN,stage_ag, name = 'stage_ag_n') %>% 
+    distinct(pick(donor, Strain_DN, stage_afm), .keep_all = T) %>% 
+    left_join(a_tbl, ., by =c('donor','Strain_DN', 'stage_afm')) %>% 
+    rename(c('Stage'= stage_afm, 'Counts' =n, 'Strain' = Strain_DN))  
+  
+    print(stage_ag_cnt)
+
+
+```
+
+
+
+```{r, fig.width = 12, fig.height = 4}
+## Prepare table for bar plot
+strain_cols_noNA <- strain_cols_n[!is.na(names(strain_cols_n))]
+dd_st <- stage_ag_cnt %>% select(donor, Strain)  %>%  distinct() %>% arrange(donor, Strain) %>%left_join(., data.frame(strain_cols_noNA) %>% rownames_to_column("Strain")) 
+
+dd_st_strip_cols_gg4hx <- dd_st %>% select(-c(Strain)) %>% pivot_wider(names_from = donor, values_from = strain_cols_noNA, values_fn = list) %>% as.list() %>% flatten()
+
+dd_st_strip_cols_gg4hx <- as.character(c(names(dd_st_strip_cols_gg4hx), unlist(dd_st_strip_cols_gg4hx))) 
+
+
+dd_st_strip_cols_gg4hx[str_detect(dd_st_strip_cols_gg4hx, "MS*")] <- donor_cols
+
+```
+
+```{r, fig.width = 5, fig.height = 15, message=FALSE, warning=FALSE}
+ss_bar_plt_flip <- stage_ag_cnt %>%
+      # ggplot(., aes(x = Stage, y = Counts, fill = Stage, color=stage_ag_n<30)) +
+      ggplot(., aes(x = Strain, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=-0.1, vjust= 0.5, position = position_dodge(width = .9), size = 6, show.legend = F, fontface ='bold', colour='black')+
+      scale_fill_manual(values = c('Asexual' = "#D7B7C7", 'Male' = "#C4CAA4", 'Female'="#6289A9")) + #'Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6"
+      # scale_color_manual(values = c('FALSE' = "white", 'TRUE' = "blue")) +
+  # geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 14)) +
+  # facet_wrap( donor ~ ., nrow = 1) +
+      # ggh4x::facet_nested(donor + Strain ~ .) +
+      # ggh4x::facet_wrap2(donor ~ ., strip = strip_nested(background_y = elem_list_rect(fill =  dd_st_strip_cols_gg4hx)), scales = "free_x", independent = "x") +
+      # ggh4x::facet_wrap2(. ~ donor, strip = strip_nested(background_y = elem_list_rect(fill =  dd_st_strip_cols_gg4hx)), scales = "free", nrow = 1) +
+      # ggh4x::facet_grid2(donor ~ ., strip = strip_nested(background_y = elem_list_rect(fill =  dd_st_strip_cols_gg4hx)), scales = "free", independent = "all") +
+      ggh4x::facet_grid2(donor ~ ., scales = "free", space = "free", shrink=TRUE, drop=TRUE, independent = T) +
+      # ggh4x::facet_nested_wrap(vars(donor, old_seu_cluster),  nrow = 1, scales = "free_x", strip = strip_nested(background_x = elem_list_rect(fill =  strip_cols_gg4hx))) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.35))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.x  = element_text(size = 15, face = "bold"),
+        axis.text.y  = element_text(size = 15, face = "bold"),
+        axis.title.x  = element_text(size = 22, face = "bold"),
+        axis.title.y = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        axis.ticks = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent'),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+      )+ 
+      guides(color = F) +
+      coord_flip()
+
+ss_bar_plt_flip
+```
+
+
+```{r, fig.width = 5, fig.height = 15, message=FALSE, warning=FALSE}
+ss_bar_plt_flip <- stage_ag_cnt %>%
+      # ggplot(., aes(x = Stage, y = Counts, fill = Stage, color=stage_ag_n<30)) +
+      ggplot(., aes(x = Strain, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=-0.1, vjust= 0.5, position = position_dodge(width = .9), size = 6, show.legend = F, fontface ='bold', colour='black')+
+      scale_fill_manual(values = c('Asexual' = "#D7B7C7", 'Male' = "#C4CAA4", 'Female'="#6289A9")) + #'Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6"
+      # scale_color_manual(values = c('FALSE' = "white", 'TRUE' = "blue")) +
+  # geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 14)) +
+  # facet_wrap( donor ~ ., nrow = 1) +
+      # ggh4x::facet_nested(donor + Strain ~ .) +
+      # ggh4x::facet_wrap2(donor ~ ., strip = strip_nested(background_y = elem_list_rect(fill =  dd_st_strip_cols_gg4hx)), scales = "free_x", independent = "x") +
+      # ggh4x::facet_wrap2(. ~ donor, strip = strip_nested(background_y = elem_list_rect(fill =  dd_st_strip_cols_gg4hx)), scales = "free", nrow = 1) +
+      # ggh4x::facet_grid2(donor ~ ., strip = strip_nested(background_y = elem_list_rect(fill =  dd_st_strip_cols_gg4hx)), scales = "free", independent = "all") +
+      ggh4x::facet_grid2(donor ~ ., scales = "free", space = "free", shrink=TRUE, drop=TRUE) +
+      # ggh4x::facet_nested_wrap(vars(donor, old_seu_cluster),  nrow = 1, scales = "free_x", strip = strip_nested(background_x = elem_list_rect(fill =  strip_cols_gg4hx))) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.35))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.x  = element_blank(),
+        axis.text.y  = element_blank(),
+        axis.title.x  = element_text(size = 22, face = "bold"),
+        axis.title.y = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        axis.ticks = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent'),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+      )+ 
+      guides(color = F) +
+      coord_flip()
+
+ss_bar_plt_flip
+```
+
+
+
+```{r, fig.width = 5, fig.height = 15, message=FALSE, warning=FALSE}
+ss_bar_plt_flip <- stage_ag_cnt %>% 
+  # mutate(n_col = case_when(stage_ag_n <=30 ~ "over", stage_ag_n > 30 ~ "below")) %>%
+      mutate(Counts2 = case_when(stage_ag_n < 30 ~ paste0("[",Counts,"]"), 
+                                 stage_ag_n >= 30 ~ as.character(Counts),
+                                 Counts == 0 ~ as.character(Counts))) %>%
+      # ggplot(., aes(x = Stage, y = Counts, fill = Stage, color=stage_ag_n<30)) +
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage))  +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts2), hjust=-0.1, vjust= 0.5, position = position_dodge(width = .9), size = 6, show.legend = F, fontface ='bold')+
+      scale_fill_manual(values = c('Asexual' = "#D7B7C7", 'Male' = "#C4CAA4", 'Female'="#6289A9")) + #'Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6"
+      # scale_color_manual(values = c('FALSE' = "white", 'TRUE' = "blue")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 14)) +
+  # facet_wrap( donor ~ ., nrow = 1) +
+      # ggh4x::facet_nested(donor + Strain ~ .) +
+      ggh4x::facet_nested(donor + Strain ~ ., strip = strip_nested(background_y = elem_list_rect(fill =  dd_st_strip_cols_gg4hx)), scales = "free_x") +
+      # ggh4x::facet_nested_wrap(vars(donor, old_seu_cluster),  nrow = 1, scales = "free_x", strip = strip_nested(background_x = elem_list_rect(fill =  strip_cols_gg4hx))) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.35))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.x  = element_blank(),
+        axis.text.y  = element_blank(),
+        axis.title.x  = element_text(size = 22, face = "bold"),
+        axis.title.y = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        axis.ticks = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent'),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+      )+ 
+      guides(color = F) +
+      coord_flip()
+
+ss_bar_plt_flip
+```
+
+```{r, fig.width= 14, fig.height=16}
+##Put together the plots for annotation
+##Get legend for the stage info for the dot plot
+strn_pts <- map2(sumap, stg_col_sumap, ~plot_grid(.x + theme(legend.position = "none", plot.margin = margin(t=0.3, r= 0.3, b=0.3, l= 0.3, unit = "cm")),
+                                                   .y + theme(legend.position = "none", plot.margin = margin(t=0.3, r= 0.3, b=0.3, l= 0.3, unit = "cm")),
+                                        ncol = 2) +  panel_border()
+                  )
+
+strn_pts_c <- plot_grid(
+  plot_grid(NULL, NULL, ncol = 2, labels = c("A", "B"), label_size = 24, vjust= 1),
+  strn_pts[[1]], NULL, strn_pts[[2]], NULL, strn_pts[[3]], NULL, strn_pts[[4]], NULL,
+  nrow = 9,
+  rel_heights = c(.03,rep(c(.2325,.01), 4))
+
+)
+
+```              
+
+
+```{r, fig.width= 14, fig.height=16}
+##Put together the plots for annotation
+##Get legend for the stage info for the dot plot
+strn_lgnd <- cowplot::get_legend(sumap[[4]])
+stg_lgnd <- cowplot::get_legend(stg_col_sumap[[4]])
+
+
+plot_grid(
+plot_grid(
+  plot_grid(strn_pts_c,
+  plot_grid(strn_lgnd, stg_lgnd, nrow = 1, rel_widths = c(.6, .4)),
+  nrow = 2, 
+  rel_heights = c(.9, .1)
+  ),
+  NULL,
+  ss_bar_plt_flip + theme(
+    legend.position = "none",
+    plot.margin = margin(t=1, r= 0.2, unit = "cm")),
+  ncol = 3,
+  rel_widths = c(.68, .02, .30),
+  labels = c('', '', 'C'),
+  label_size = 24,
+  vjust= 1.2
+  )
+)
+
+```              
+
+```{r, fig.width= 14, fig.height=16}
+##Put together the plots for annotation
+##Get legend for the stage info for the dot plot
+strn_lgnd <- cowplot::get_legend(sumap[[4]])
+stg_lgnd <- cowplot::get_legend(stg_col_sumap[[4]])
+
+
+plot_grid(
+plot_grid(
+  strn_pts_c,
+  NULL,
+  ss_bar_plt_flip + theme(
+    legend.position = "none",
+    plot.margin = margin(t=1, r= 0.2, unit = "cm")),
+  ncol = 3,
+  rel_widths = c(.68, .02, .30),
+  labels = c('', '', 'C'),
+  label_size = 24,
+  vjust= 1.2
+  ),
+  plot_grid(strn_lgnd, stg_lgnd, nrow = 1, rel_widths = c(.6, .4)),
+  nrow = 2, 
+  rel_heights = c(.9, .1)
+)
+
+```              
+
+
+```{r, results='asis', fig.width=6.8, fig.height=7.5}
+list(msc_m21_qcd_anotd_strnPC, names(msc_m21_qcd_anotd_strnPC))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    a_tbl = ..1@meta.data %>% 
+      filter(!is.na(stageHL))%>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%
+      dplyr::count(.,stageHL, strain_qcd)%>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%
+      mutate(across(strain_qcd, ~droplevels(factor(., levels = strain_dset_lvls))))  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n)) 
+    print(head(a_tbl))
+    
+    a_plt <- a_tbl %>%
+      ggplot(., aes(x = forcats::fct_rev(Stage), y = Counts, fill = strain_qcd)) +
+      scale_fill_manual(values = strain_cols) +
+      scale_x_discrete(labels = a_tbl$Stage %>% levels() %>% str_replace(., ' ', '\n') %>% set_names(levels(a_tbl$Stage))) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5)
+      theme_classic() +
+      labs(x = 'Stage')+
+      theme(
+        axis.text.y  = element_text(size = 24),
+        axis.text.x = element_text(size = 22, angle = 90),#, angle = 45
+        axis.title.y  = element_text(size = 24, face = "bold"),
+        axis.title.x = element_text(size = 22, face = "bold"),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom"#,
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+      ) +
+      # coord_fixed()#+
+      coord_flip() #+
+    # guides(color = guide_legend(override.aes = list(size = 3.5), nrow = 3))
+    
+    print(a_plt)
+    
+    
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+```{r, fig.width= 14, fig.height=10}
+##Put together the plots for annotation
+
+##Get legend for the stage info for the dot plot
+
+plot_grid(
+  plot_grid(sumap[[1]] + 
+              theme(#axis.title = element_text(size = '20', face = 'bold'),
+                    # axis.text = element_text(size = '20'),
+                    plot.margin = margin(l=0, r= 2, unit = "cm")
+                    ), 
+            stg_col_sumap[[1]]+ 
+              theme(#axis.title = element_text(size = '20', face = 'bold'),
+                    # axis.text = element_text(size = '20', face = 'plain')
+                    ), 
+            ncol = 2,
+            rel_widths = c(.48,.52),
+            labels = c('A', 'B'),
+            label_size = 24,
+            vjust= 0.6)+
+              theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm")),
+  ss_bar_plt[[1]]+
+              theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm")),
+  nrow = 2,
+  rel_heights = c(.62,.38),
+  labels = c('', 'C'),
+  label_size = 24,
+  vjust= 0.6
+  )
+
+```              
+
+
+```{r, fig.width= 14, fig.height=10}
+##Put together the plots for annotation
+
+##Get legend for the stage info for the dot plot
+
+plot_grid(
+  plot_grid(sumap[[1]] + 
+              theme(plot.margin = margin(l=0, r= 2, unit = "cm")), 
+            stg_col_sumap[[1]]+ 
+              theme(#axis.title = element_text(size = '20', face = 'bold'),
+                    # axis.text = element_text(size = '20', face = 'plain')
+                    ), 
+            ncol = 2,
+            rel_widths = c(.48,.52),
+            labels = c('A', 'B'),
+            label_size = 24,
+            vjust= 0.6)+
+              theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm")),
+  ss_bar_plt[[1]]+
+              theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm")),
+  nrow = 2,
+  rel_heights = c(.62,.38),
+  labels = c('', 'C'),
+  label_size = 24,
+  vjust= 0.6
+  )
+
+```              
+
+```{r, results='asis'}
+# , fig.width=9.5
+
+strn_stg_ag_plt <- list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN,  stage_ag) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(Stage= stage_ag) %>%
+      ggplot(., aes(x=sc_PC1, y=sc_PC3, color = Strain_DN, group = Stage)) + 
+      geom_point(size=2, aes(shape=Stage)) +
+      scale_color_manual(values = strain_cols_n) +
+      #scale_shape_manual(values = c('Asexual' = 6 , 'Male' = 3, 'Female' = 0)) +
+      scale_shape_manual(values = c('Asexual' = 16 , 'Gametocyte' = 3)) +
+      labs(color = 'Strain') +
+      theme_void()+
+      theme(#axis.text=element_text(size=18), 
+            axis.text=element_blank(), 
+            #axis.title=element_text(size=18,face="bold"), 
+            axis.title.y = element_text(angle = 90),
+            axis.title = element_text(hjust = 0, size=16, face = 'bold'),
+            legend.text = element_text(size=22), 
+            legend.title = element_text(size=22,face="bold"),
+            axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"), color = 'black')
+            ) + 
+      guides(color = guide_legend(override.aes = list(size = 4), order = 1), x= trunc_axis, y= trunc_axis) +
+      scale_x_continuous(breaks = NULL) +
+      scale_y_continuous(breaks = NULL)
+    
+    
+    return(a)
+    cat('\n')
+    cat("\n")
+  })
+
+strn_stg_ag_plt
+
+
+```
+
+
+
+```{r, fig.width = 2.5, fig.height = 3, message=FALSE, warning=FALSE}
+
+
+strn_stg_ag_dist_plts <-list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>%
+      mutate(across(c(Strain_DN,stage_ag), factor))%>%
+      mutate(Stage= stage_ag) %>%
+      dplyr::count(Strain_DN, Stage, .drop = FALSE) %>% 
+      rename(c('Counts' =n, 'Strain' = Strain_DN)) 
+  
+
+    b_plt <- a_tbl %>%
+      # mutate(across(Stage, ~droplevels(factor(., levels=c('Asexual', 'Gametocyte'))))) %>%
+      ggplot(., aes(x = forcats::fct_rev(Strain), y = Counts, fill = forcats::fct_rev(Stage))) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=-0.3, vjust= 0.5, position = position_dodge(width = .9), size = 5, show.legend = F)+
+      scale_fill_manual(values = c('Asexual' = "#FFE5B4", 'Gametocyte' = "#008080")) +
+  # geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 7)) +
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+  # facet_wrap( Strain ~ ., ncol = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.55))) +
+      theme_classic() +
+  labs( y = 'Counts', x = 'Strain')+
+      theme(
+        axis.text.y  = element_text(size = 20),
+        axis.title.y  = element_text(size = 20, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent'),
+        legend.box.margin = margin(t = 0, r = 1.8, b = 0, l = 0, unit = "cm")#,
+        # legend.margin=margin(t = 0, unit='cm')
+      ) +
+      guides(fill = guide_legend(title = 'Stage', nrow = 2, title.position = "top",keywidth = unit(0.4, "cm"), reverse = T)) +coord_flip()
+    
+    tbl_plt <- a_tbl %>% 
+    mutate(labs = as.character(Counts), ff='plain') %>%
+  ##Add the heading information
+  bind_rows(data.frame(Strain = factor(c('', '')), Stage = factor(c('Asexual', 'Gametocyte')), Counts = c(0,0), labs=c(paste("\u25cf", 'Asx'), '+ Gam'), ff='bold'),.) %>%
+      # mutate(across(Stage, ~droplevels(factor(., levels=c('Asexual', 'Gametocyte'))))) %>%
+      ggplot(., aes(x = Stage, y = forcats::fct_rev(Strain), fill = Counts)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = labs, fontface = ff), color = "black", size = 5.0) +
+      scale_x_discrete(position = "top")  +
+      # scale_y_discrete(na.translate = F)  +
+      scale_fill_gradient(low = "white", high = "skyblue")+
+      geom_vline(xintercept=1.5)+
+      geom_hline(yintercept=8.5)+
+      theme_classic()+
+  labs( y = 'Strain', x = 'Coarse-stage') +
+      theme(
+        axis.text.y  = element_text(size = 20, colour = strain_cols_n[sort(strain_dset_lvls, decreasing = T)]),
+        axis.title.y  = element_text(size = 20, face = "bold"),
+        axis.ticks.y  = element_blank(),
+        # axis.text.x  = element_text(size = 16),
+        axis.text.x  = element_blank(),
+        axis.title.x  = element_text(size = 18, face = "bold"),
+        legend.position = 'none',
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_blank(),
+        axis.line = element_blank(),
+        legend.box.margin = margin(t = 0, r = 1.8, b = 0, l = 0, unit = "cm"),
+        panel.grid.minor.x = element_line(color = 'black')#,
+        # legend.margin=margin(t = 0, unit='cm')
+      )
+    
+    ##For more sohpisticated axis labelling  Combine thise  with dat$model <- paste0("<span style=\"color: ", dat$color, "\">", dat$model, "</span>")
+    ##this ggtext::element_markdown(size = 12) from https://stackoverflow.com/questions/72749018/color-axis-text-to-match-grouping-variable-in-ggplot
+    
+    # b_plt
+    # tbl_plt
+    return(list(b_plt,tbl_plt))
+})
+
+strn_stg_ag_dist_plts
+```
+
+##  THIS SHOULD BE THE START OF A NEW NOTEBOOK
+create new strain variable with the cells in strain_stage cluster with more than 20
+```{r}
+##Add the number per xluster as a column in metadata
+##!!! NOTE - coalesce SC1 and SC8 into SC1 so the 'strain' metadata now has changed - removing SC8 males as well due to low genotype confidence
+
+msc_m21_qcd_anotd_strnPC <- map(msc_m21_qcd_anotd_strnPC, ~.x@meta.data  %>%
+        # mutate(strain = strain) %>%
+        # mutate(strain_qcd = case_when(strain == 'SC8' & stage_afm == 'Asexual' ~ 'SC1', 
+        #                           T ~ strain)) %>%
+        mutate(strain_qcd = case_when(strain_ag_n>=30 ~ Strain_DN)) %>%
+      dplyr::select(strain_qcd)  %>% 
+        AddMetaData(..1, .)) 
+
+##Remove cells in clusters with less than 20
+# msc_m21_qcd_anotd_strnPC <- map(msc_m21_qcd_anotd_strnPC, ~.x[,.x@meta.data %>% filter(!is.na(strain_qcd) & strain_afm_n>=4) %>% rownames()  ])
+# msc_m21_qcd_anotd_strnPC <- map(msc_m21_qcd_anotd_strnPC, ~.x[,.x@meta.data %>% filter(!is.na(strain_qcd)) %>% rownames()  ])
+# msc_m21_qcd_anotd_strnPC <- map(msc_m21_qcd_anotd_strnPC, ~.x[,.x@meta.data %>% filter(strain_ag_n > 20) %>% rownames()  ])
+# msc_qcd_anotd_stgstrqc <- msc_m21_qcd_anotd_strnPC
+
+```
+
+
+Write out strain_qcd/strain + stage_ag/stage_afm barcodes to farm for pseudobulk genotyping
+
+```{r}
+# ## DOUBLETS WRITTEN INTO THE SAME FOLDER IN MSC_PP.rmd - SHOULD BE COMBINED INTO ONE NOTEBOOK
+# for (str_q in c('strain', 'strain_qcd')){
+#   ss_qcd_ano <- map(msc_m21_qcd_anotd_strnPC[1], ~.x@meta.data %>% dplyr::select(str_q) %>% mutate(across(c(str_q), ~droplevels(factor(.)))) %>% rownames_to_column('bcode')%>% rename('str'=str_q) %>% split(f = ~ str, drop = T))
+#   names(ss_qcd_ano[[1]]) <- names(ss_qcd_ano[[1]]) %>% str_replace(., '\\.', '_')
+#   
+#   system(paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',str_q,'_k8/'))
+#   system(paste0('rm /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',str_q,'_k8/*'))
+#   
+#   imap(ss_qcd_ano[[1]], ~write(.x$bcode, paste0('data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',str_q,'_k8/',.y, '.tsv')))
+#    
+#   ##Add doublets
+#   system(
+#     paste0('rsync -av /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/Doublet.tsv ', '/Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',str_q,'_k8/')
+#   )
+#   
+#   system(
+#     paste0('rsync -av  /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',str_q,'_k8', ' jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/')
+#   )
+#   
+#   
+#   for(stg_c in c('stage_ag', 'stage_afm')){
+#     ss_qcd_ano <- map(msc_m21_qcd_anotd_strnPC[1], ~.x@meta.data %>% dplyr::select(str_q, stg_c) %>% mutate(across(c(str_q, stg_c), ~droplevels(factor(.)))) %>% rownames_to_column('bcode')%>% rename('stg'=stg_c, 'str'=str_q) %>% split(f = ~ str+stg, drop = T))
+#     names(ss_qcd_ano[[1]]) <- names(ss_qcd_ano[[1]]) %>% str_replace(., '\\.', '_')
+#     
+#     system(paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',stg_c,'_',str_q,'_k8/'))
+#     system(paste0('rm /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',stg_c,'_',str_q,'_k8/*'))
+#     
+#     imap(ss_qcd_ano[[1]], ~write(.x$bcode, paste0('data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',stg_c,'_',str_q,'_k8/',.y, '.tsv')))
+#     
+#     ##Add doublets
+#     system(
+#     paste0('rsync -av /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/Doublet.tsv ', '/Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',stg_c,'_',str_q,'_k8/')
+#   )
+#     
+#     system(
+#       paste0('rsync -av  /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',stg_c,'_',str_q,'_k8', ' jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/')
+#     )
+#     
+#   }
+# } 
+
+```
+
+Plot with stage stratified as asexual male, female and including all 8 strains that go for pseudobulking
+
+```{r, results='asis'}
+# , fig.width=9.5
+
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(stage_afm, Strain_DN) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(Stage= stage_afm) %>%
+      ggplot(., aes(x=sc_PC1, y=sc_PC3, color = Strain_DN, group = Stage)) + 
+      geom_point(size=2, aes(shape=Stage)) +
+      scale_color_manual(values = strain_cols_n) +
+      #scale_shape_manual(values = c('Asexual' = 6 , 'Male' = 3, 'Female' = 0)) +
+      scale_shape_manual(values = c('Asexual' = 16 , 'Male' = 3,  'Female' = 6)) +
+      labs(color = 'Strain') +
+      theme_void()+
+      theme(#axis.text=element_text(size=18), 
+            axis.text=element_blank(), 
+            #axis.title=element_text(size=18,face="bold"), 
+            axis.title=element_blank(),
+            legend.text = element_text(size=22), 
+            legend.title = element_text(size=22,face="bold")) + 
+      guides(color = guide_legend(override.aes = list(size = 3.5), order = 1)) 
+    
+    print(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+```{r, fig.width = 7, fig.height = 4, message=FALSE, warning=FALSE}
+
+
+list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>%
+      mutate(Stage= stage_afm) %>%
+      mutate(across(Stage, ~factor(., levels=c('Asexual', 'Female', 'Male')))) %>%
+    filter(strain_ag_n > 20) %>%
+      dplyr::count(Strain_DN, Stage, .drop = FALSE) %>% 
+      rename(c('Counts' =n, 'Strain' = Strain_DN)) 
+  
+
+    b_plt <- a_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 5, show.legend = F, fontface ='bold')+
+      scale_fill_manual(values = c('Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 7)) +
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+  facet_wrap( Strain ~ ., nrow = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+        # legend.margin=margin(t = 0, unit='cm')
+      )
+    b_plt
+})
+
+
+```
+
+
+
+```{r, fig.width = 2.5, fig.height = 5, message=FALSE, warning=FALSE}
+
+
+list( msc_m21_qcd_anotd_strnPC[1])  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>%
+      mutate(Stage= stage_ag) %>%
+      mutate(across(Stage, ~droplevels(factor(., levels=c('Asexual', 'Gametocyte'))))) %>%
+      dplyr::count(strain_qcd, Stage, .drop = FALSE) %>% 
+      filter(strain_qcd != 'SC8') %>%
+      rename(c('Counts' =n, 'Strain' = strain_qcd)) 
+  
+
+    b_plt <- a_tbl %>%
+      ggplot(., aes(x = forcats::fct_rev(Strain), y = Counts, fill = forcats::fct_rev(Stage))) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=-0.3, vjust= 0.5, position = position_dodge(width = .9), size = 6, show.legend = F)+
+      scale_fill_manual(values = c('Asexual' = "#FFE5B4", 'Gametocyte' = "#008080")) +
+  # geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 7)) +
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+  # facet_wrap( Strain ~ ., ncol = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.55))) +
+      theme_classic() +
+  labs( y = 'Counts', x = 'Strain')+
+      theme(
+        axis.text.y  = element_text(size = 20),
+        axis.title.y  = element_text(size = 20, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent'),
+        legend.box.margin = margin(t = 0, r = 1.8, b = 0, l = 0, unit = "cm")#,
+        # legend.margin=margin(t = 0, unit='cm')
+      ) +
+      guides(fill = guide_legend(title = 'Stage', nrow = 2, title.position = "top",keywidth = unit(0.4, "cm"))) +coord_flip()
+    b_plt
+})
+
+
+```
+
+
+
+
+```{r, results='asis'}
+# , fig.width=9.5
+
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+    right_join(..2@meta.data %>% 
+                  dplyr::select(stageHL, strain_qcd,  stage_ag) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(Stage= stage_ag) %>%
+      ggplot(., aes(x=sc_PC1, y=sc_PC3, color = strain_qcd, group = Stage)) + 
+      geom_point(size=2, aes(shape=Stage)) +
+      scale_color_manual(values = strain_cols_n) +
+      #scale_shape_manual(values = c('Asexual' = 6 , 'Male' = 3, 'Female' = 0)) +
+      scale_shape_manual(values = c('Asexual' = 16 , 'Gametocyte' = 3)) +
+      labs(color = 'Strain') +
+      theme_void()+
+      theme(#axis.text=element_text(size=18), 
+            axis.text=element_blank(), 
+            #axis.title=element_text(size=18,face="bold"), 
+            axis.title=element_blank(),
+            legend.text = element_text(size=22), 
+            legend.title = element_text(size=22,face="bold")) + 
+      guides(color = guide_legend(override.aes = list(size = 3.5), order = 1)) 
+    
+    print(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+```{r, results='asis'}
+# , fig.width=9.5
+
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(stageHL, strain_qcd,  stage_ag) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(Stage= stage_ag) %>%
+      # mutate(across(Stage, ~factor(., levels = c('Gametocyte', 'Asexual')))) %>%
+      filter(strain_qcd != 'SC8') %>%
+      ggplot(., aes(x=sc_PC1, y=sc_PC3, color = strain_qcd, group = Stage)) + 
+      geom_point(size=2, aes(shape=Stage)) +
+      scale_color_manual(values = strain_cols_n) +
+      #scale_shape_manual(values = c('Asexual' = 6 , 'Male' = 3, 'Female' = 0)) +
+      scale_shape_manual(values = c('Asexual' = 16 , 'Gametocyte' = 3)) +
+      labs(color = 'Strain') +
+      theme_void()+
+      theme(#axis.text=element_text(size=18), 
+            axis.text=element_blank(), 
+            #axis.title=element_text(size=18,face="bold"), 
+            axis.title=element_blank(),
+            legend.text = element_text(size=22), 
+            legend.title = element_text(size=22,face="bold")) + 
+      guides(color = guide_legend(override.aes = list(size = 3.5), order = 1)) 
+    
+    print(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+
+```{r, results='asis'}
+# , fig.width=9.5
+
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(stageHL, Strain_DN,  stage_ag) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      mutate(Stage= stageHL) %>%
+      ggplot(., aes(x=sc_PC1, y=sc_PC3, color = Strain_DN, group = Stage)) + 
+      geom_point(size=2) +
+      geom_point(size=2, aes(shape=Stage)) +
+      scale_color_manual(values = c('SC2' = "#910000", "SC6" = "lightgrey", "SC1"="lightgrey", "SC5"="#007c71", "SC3"="lightgrey", "SC4"="lightgrey", "SC7"= "#5d57a4", "SC8"= "lightgrey"  )) +
+      scale_shape_manual(values = c('Female (HE)' = 16 , 'Late ring'=3, 'Early trophozoite'=3, 'Female (LE)'=3,'Male (LE)'=3,'Male (HE)'=3)) +
+      labs(color = 'Strain') +
+      theme_void()+
+      theme(#axis.text=element_text(size=18), 
+            axis.text=element_blank(), 
+            #axis.title=element_text(size=18,face="bold"), 
+            axis.title=element_blank(),
+            legend.text = element_text(size=22), 
+            legend.title = element_text(size=22,face="bold")) + 
+      guides(color = guide_legend(override.aes = list(size = 3.5), order = 1)) 
+    
+    print(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+Just plotting strains
+
+```{r, results='asis'}
+# , fig.width=9.5
+
+list(soupo_PCA_df, msc_m21_qcd_anotd_strnPC,names(soupo_PCA_df))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..3, '   \n')
+    
+    a = ..1 %>%
+      right_join(..2@meta.data %>% 
+                  dplyr::select(strain_qcd) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      ggplot(., aes(x=sc_PC1, y=sc_PC3, color = strain_qcd)) + 
+      geom_point(size=2) +
+      scale_color_manual(values = strain_cols_n) +
+      #scale_shape_manual(values = c('Asexual' = 6 , 'Male' = 3, 'Female' = 0)) +
+      scale_shape_manual(values = c('Asexual' = 16 , 'Gametocyte' = 3)) +
+      labs(color = 'Strain') +
+      theme_void()+
+      theme(#axis.text=element_text(size=18), 
+            axis.text=element_blank(), 
+            #axis.title=element_text(size=18,face="bold"), 
+            axis.title=element_blank(),
+            legend.text = element_text(size=22), 
+            legend.title = element_text(size=22,face="bold")) + 
+      guides(color = F) 
+    
+    print(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+```{r, fig.width = 5.2, fig.height = 4, message=FALSE, warning=FALSE}
+
+
+list( msc_m21_qcd_anotd_strnPC)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1@meta.data %>%
+      dplyr::count(strain_qcd, .drop = FALSE) %>% 
+      rename(c('Counts' =n, 'Strain' = strain_qcd)) 
+  
+
+    b_plt <- a_tbl %>%
+      ggplot(., aes(x = Strain, y = Counts, fill = Strain)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 5, show.legend = F)+
+      scale_fill_manual(values = strain_cols_n)+
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      theme_classic() +
+  labs(x = 'Strain', y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_text(size = 22, face = "bold"),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+        # legend.margin=margin(t = 0, unit='cm')
+      )+
+      guides(fill = guide_legend( nrow = 2, title.position = "top"))
+    b_plt
+})
+
+
+```
+
+RECLUSTER CELLS TO GET UMAP AFTER REMOVING 24 CELLS OCCURING IN LOW FREQUENCIES
+```{r, message=FALSE, warning=FALSE}
+# pc_list <-list('6','4','5', '5', '12')
+# pc_list <-pc_list[4]
+# ##555 105
+# 
+# # msc_m21_qcd_anotd_strnPC[4] <- list(msc_m21_qcd_anotd_strnPC[4], pc_list[4], res_list[4]) %>%
+# msc_m21_qcd_anotd_strnPC[1] <- list(msc_m21_qcd_anotd_strnPC[1], pc_list[1]) %>%
+#   # pmap(~RunUMAP(..1, dims = 1:..2, n.components = 3L, verbose=F, seed.use = 929) %>% ##for k7
+#   pmap(~RunUMAP(..1, dims = 1:..2, n.components = 3L, verbose=F, seed.use = 829) %>%
+#          FindNeighbors(., dims = 1:..2, verbose = FALSE) 
+#   )
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+res_list <- c(0.18,0.12,0.12,0.12,0.12)
+# res_list <- res_list[4]
+##555 105
+
+# msc_m21_qcd_anotd_strnPC[4] <- list(msc_m21_qcd_anotd_strnPC[4], res_list[4]) %>%
+# msc_m21_qcd_anotd_strnPC[1] <- list(msc_m21_qcd_anotd_strnPC[1], res_list[1]) %>%
+#   pmap(~FindClusters(..1, resolution = ..2, verbose=T)
+#   )
+
+```
+
+### Visualize all annotated MSC
+
+#### UMAP & PCA coloured by stage {.tabset}
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+list(msc_m21_qcd_anotd_strnPC, sample_id_lst[1:4])  %>% 
+  purrr::pmap(.,~{
+    # create tabset for each group 
+    cat('##### ',..2,'   \n')
+    p_umap <- DimPlot(., reduction = "umap",  group.by  = 'old_seu_cluster'#, pt.size = 1, label=T, cells.highlight = .@meta.data %>% filter(seurat_clusters == '2') %>% row.names(), sizes.highlight = 1
+    )  + 
+      theme(axis.text=element_text(size=18), 
+            axis.title=element_text(size=20,face="bold"), 
+            # legend.text = element_blank(), 
+            plot.title = element_blank(),
+            strip.text.x = element_text(size = 24, face = "bold") )
+    print(p_umap)
+    cat("\n")
+  })
+
+```
+
+
+```{r, results='asis', fig.width=6.8, fig.height=7.5}
+list(msc_m21_qcd_anotd_strnPC,names(msc_m21_qcd_anotd_strnPC))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    a_tbl = ..1@meta.data %>% 
+      filter(!is.na(stageHL))%>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%
+      dplyr::count(.,stageHL, strain_qcd)%>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%
+      mutate(across(strain_qcd, ~droplevels(factor(., levels = strain_dset_lvls))))  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n)) 
+    print(head(a_tbl))
+    
+    a_plt <- a_tbl %>%
+      ggplot(., aes(x = forcats::fct_rev(Stage), y = Counts, fill = strain_qcd)) +
+      scale_fill_manual(values = strain_cols) +
+      scale_x_discrete(labels = a_tbl$Stage %>% levels() %>% str_replace(., ' ', '\n') %>% set_names(levels(a_tbl$Stage))) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5)
+      theme_classic() +
+      labs(x = 'Stage')+
+      theme(
+        axis.text.y  = element_text(size = 24),
+        axis.text.x = element_text(size = 22, angle = 90),#, angle = 45
+        axis.title.y  = element_text(size = 24, face = "bold"),
+        axis.title.x = element_text(size = 22, face = "bold"),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom"#,
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+      ) +
+      # coord_fixed()#+
+      coord_flip() #+
+    # guides(color = guide_legend(override.aes = list(size = 3.5), nrow = 3))
+    
+    print(a_plt)
+    
+    
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+```{r, results='asis', fig.width=10.8, fig.height=8}
+list(msc_m21_qcd_anotd_strnPC,names(msc_m21_qcd_anotd_strnPC))  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    a_tbl = ..1@meta.data %>% 
+      filter(!is.na(stageHL))%>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%
+      dplyr::count(.,stageHL, strain_qcd)%>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%
+      mutate(across(strain_qcd, ~droplevels(factor(., levels = strain_dset_lvls))))  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n)) 
+    print(head(a_tbl))
+    
+    
+    b_plt <- a_tbl %>%
+      ggplot(., aes(x = strain_qcd, y = Counts, fill = Stage)) +
+      scale_fill_manual(values = sp_fld_colors) +
+      # scale_x_discrete(labels = a_tbl$v %>% levels() %>% str_replace(., ' ', '\n') %>% set_names(levels(a_tbl$strain_qcd))) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5)
+      theme_classic() +
+      labs(x = 'Strain')+
+      theme(
+        axis.text.y  = element_text(size = 24),
+        axis.text.x = element_text(size = 22, angle = 90),#, angle = 45
+        axis.title.y  = element_text(size = 24, face = "bold"),
+        axis.title.x = element_text(size = 22, face = "bold"),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom"#,
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+      ) #+
+    # coord_fixed()#+
+    # coord_flip() #+
+    # guides(color = guide_legend(override.aes = list(size = 3.5), nrow = 3))
+    
+    print(b_plt)
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+### Boxplot of gene/transcript count of MSCs per cell by stageHL and strain_qcd {.tabset}
+Checking whether some strains have more counts per stage
+
+```{r, results='asis', fig.width = 8, fig.height = 3}
+list(msc_m21_qcd_anotd_strnPC, sample_id_lst[1:4])  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    cat('nfeature \n')
+    a_gns = ..1@meta.data %>%
+      ggplot(., aes(x=stageHL, y=nFeature_RNA, color = strain_qcd)) +
+      geom_boxplot(aes( color = strain_qcd)) +
+      geom_point(aes(group=strain_qcd), size = 0.7, position = position_jitterdodge(jitter.width = 0.07))+ 
+      scale_color_manual(values = strain_cols)+
+      # stat_summary(fun.data = stat_box_data, 
+      #              geom = "label", 
+      #              hjust = 0.6,
+      #              vjust = 0.9,
+      #              size = 4.5,
+      #              label.padding = unit(0.1, "lines"), 
+      #              position = position_jitterdodge(jitter.width = 0.3))+
+      theme_classic() +
+      theme(axis.text=element_text(size=14), 
+            axis.title=element_text(size=16,face="bold"), 
+            legend.text = element_text(size=15), 
+            title = element_text(size=16,face="bold"))
+    
+    print(a_gns)
+    cat('\n')
+    cat('nCounts \n')
+    a_cnts = ..1@meta.data %>%
+      ggplot(., aes(x=stageHL, y=nCount_RNA, color = strain_qcd)) +
+      geom_boxplot(aes( color = strain_qcd)) +
+      geom_point(aes(group=strain_qcd), size = 0.7, position = position_jitterdodge(jitter.width = 0.07))+ 
+      scale_color_manual(values = strain_cols)+
+      # stat_summary(fun.data = stat_box_data, 
+      #              geom = "label_repel", 
+      #              vjust = -2,
+      #              size = 3.5,
+      #              label.padding = unit(0, "lines"),
+      #              position = position_jitterdodge(jitter.width = 0.2),
+      #              direction = "y",
+      #              show.legend = FALSE)+
+      theme_classic() +
+      theme(axis.text=element_text(size=14), 
+            axis.title=element_text(size=16,face="bold"), 
+            legend.text = element_text(size=15), 
+            title = element_text(size=16,face="bold"))
+    
+    print(a_cnts)
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+### Tabulate number of parasites stratified by stage and strain_qcd{.tabset}
+
+
+```{r, results='asis'}
+list(msc_m21_qcd_anotd_strnPC, sample_id_lst[1:4])  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    .@meta.data  %>% dplyr::count(stageHL, strain_qcd) %>% knitr::kable() %>% print()
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+```{r, results='asis'}
+list(msc_m21_qcd_anotd_strnPC, sample_id_lst[1:4])  %>%
+  purrr::pmap(.,  ~ {
+    # create tabset for each group
+    cat('####', ..2, '   \n')
+    
+    .@meta.data  %>% dplyr::count(  stageHL,) %>% knitr::kable() %>% print()
+    cat('\n\n<!-- -->\n\n')
+  })
+
+```
+
+### Save annotated object as QC is satisfactory
+These objects are used in downstream analyses as shown in other notebooks
+```{r}
+saveRDS(msc_m21_qcd_anotd_strnPC, 'data/processed/msc14/5736STDY11771546_DB52e_star/msc_m21_qcd_anotd_strnPC.RDS')
+```
+
+```{r}
+# msc_m21_qcd_anotd_strnPC[[1]]@meta.data %>% rownames_to_column('cell_bcodes') %>%  write_csv(.,'data/processed/msc14/5736STDY11771546_DB52e_star/msc14_qcd_annotated_mdta.csv' )
+```
+
+
+### Generate image for manuscript
+
+```{r}
+m14_scmap_mca_umap_labs_in <- readRDS('plots/fig4/m14_scmap_mca_umap_labs_in.RDS')
+```
+
+```{r, fig.width= 12, fig.height=4}
+##Put together the plots for annotation
+
+##Get legend for the stage info for the dot plot
+
+
+stg_strn_scmap_pca_tbl_fig4_grid <- plot_grid(m14_scmap_mca_umap_labs_in + 
+                                                theme(axis.title = element_text(size = 12, face = 'bold'),
+                                                      plot.margin = margin(l=0, r= 0, unit = "cm"),
+                                                      legend.text=element_text(size=14)), 
+                                              strn_stg_ag_plt[[1]]+ 
+                                                theme(axis.title=element_text(size=12,face="bold"),
+                                                      legend.position = 'none'), 
+                                              plot_grid(NULL, strn_stg_ag_dist_plts[[1]][[2]] + 
+                                                          theme(axis.title.y = element_text(size = 15, face = 'bold'),
+                                                                axis.text.y = element_text(size = 14, face = 'bold'),
+                                                                axis.title.x  = element_text(size = 15, face = "bold")), 
+                                                        NULL, 
+                                                        ncol=1, 
+                                                        rel_heights = c(.08,.84,.08)),
+                                              ncol = 3,
+                                              rel_widths = c(.41,.40,.19),
+                                              labels = c('A', 'B', ''),
+                                              label_size = 24,
+                                              vjust= 1
+)
+##Save the grid with UMAP of MCA cells colored by most similar to msc14 via scmap for the main, msc14 genotype PCA colored by stage asexual-gam and strain and distribution table
+saveRDS(stg_strn_scmap_pca_tbl_fig4_grid, "plots/fig4/stg_strn_scmap_pca_tbl_fig4_grid.RDS")
+
+stg_strn_scmap_pca_tbl_fig4_grid
+```
+
+
+### Copy barcodes for subsets for further analysis farm
+#### Strain barcodes - be careful - there might be some errors
+Writing out barcodes for the strain_qcd information for resouporcell deu and plotting
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+##Writing out barcodes for the strain_qcd information for deu and plotting
+
+##Declaring variables for naming the files in lists to allow each barcodes file to end up in the correct directory and have the correct name
+
+source_irods <- c("5736STDY11771545", "5736STDY11771544", "5736STDY11771536", "5736STDY11771546", "5736STDY11771535")
+source_irods <- source_irods[4]
+sample_name <- c("MSC1272", "MSC13", "MSC3", "MSC14", "MSC1")
+sample_name <- sample_name[4]
+sample_id_irods <- str_sort(paste(sample_name, source_irods, sep='_'), numeric = T)
+```
+
+### Writing barcodes for QCd, and annotated cells for BAM files plotting on farm
+#### Remove cells with unassigned stages
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+##Writing out barcodes for the stage and strain information for deu and plotting
+stg_strn_deu_tbls <- msc_m21_qcd_anotd_strnPC[1] %>%
+  map(
+    ~.@meta.data %>% 
+      filter(stageHL != 'Unassigned') %>%
+      rownames_to_column('cell_bc') %>%
+      mutate(stage_deu = case_when(stageHL ==  'Female (HE)' ~ 'fh', 
+                                   stageHL ==  'Female (LE)' ~ 'fl', 
+                                   stageHL ==  'Male (HE)' ~ 'mh', 
+                                   stageHL ==  'Male (LE)' ~ 'ml', 
+                                   stageHL ==  'Gametocyte (male)' ~ 'm', 
+                                   stageHL ==  'Gametocyte (female)' ~ 'f', 
+                                   stageHL %in% c('Late ring', 'Early trophozoite', 'Late schizont') ~ 'asex',
+                                   T ~ as.character(stageHL))) %>%
+      dplyr::select(stage_deu,strain_qcd,cell_bc)
+  )
+
+```
+
+#### Stage barcodes
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+##remove the tsv files in the folder first before writing to it
+system(paste0('rm /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/stage/*tsv'))
+  
+## Split the barcodes and assign names for the file_names
+named_stage_deu_tbls <- list(stg_strn_deu_tbls)%>% 
+  pmap(~..1 %>% 
+         dplyr::select(stage_deu, cell_bc) %>%
+         group_split(stage_deu)%>%
+         setNames(sort(unique(..1$stage_deu)))
+  ) %>% setNames(sample_id_irods[1])
+
+unlist(named_stage_deu_tbls[1], recursive = F) %>%
+  imap(., ~write(.x$cell_bc, paste0('data/processed/',str_remove(.y, '_.*'),'/',str_extract(.y, '5736STDY.*71..[0-9]'),'_DB52e_star/bcodes/stage/', str_remove(.y, '^.*\\.'), '.tsv')))
+
+```
+
+#### All and differnt stage combination barcodes
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+##remove the tsv files in the folder first before writing to it
+system(paste0('rm /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/stage_combinations/*tsv'))
+  
+##Write all barcodes for dexseq
+stg_strn_deu_tbls %>%
+  setNames(sample_id_irods[1]) %>%
+  imap(., ~{.x %>% pull(cell_bc) %>% write(., paste0('data/processed/',str_remove(.y, '_.*'),'/',str_extract(.y, '5736STDY.*71..[0-9]'),'_DB52e_star/bcodes/stage_combinations/all.tsv'))})
+
+##Write all except female for dexseq
+stg_strn_deu_tbls %>%
+  setNames(sample_id_irods[1]) %>%
+  imap(., ~{.x %>%  filter(stage_deu %in% c('asex','mh','ml')) %>% pull(cell_bc) %>% write(., paste0('data/processed/',str_remove(.y, '_.*'),'/',str_extract(.y, '5736STDY.*71..[0-9]'),'_DB52e_star/bcodes/stage_combinations/non_fh_fl.tsv'))})
+
+##Write all except male for dexseq
+stg_strn_deu_tbls %>%
+  setNames(sample_id_irods[1]) %>%
+  imap(., ~{.x %>%  filter(stage_deu %in% c('asex','fh', 'fl')) %>% pull(cell_bc) %>% write(., paste0('data/processed/',str_remove(.y, '_.*'),'/',str_extract(.y, '5736STDY.*71..[0-9]'),'_DB52e_star/bcodes/stage_combinations/non_mh_ml.tsv'))})
+
+##Write all except low expression for dexseq
+stg_strn_deu_tbls %>%
+  setNames(sample_id_irods[1]) %>%
+  imap(., ~{.x %>%  filter(stage_deu %in% c('asex','fh','mh')) %>% pull(cell_bc) %>% write(., paste0('data/processed/',str_remove(.y, '_.*'),'/',str_extract(.y, '5736STDY.*71..[0-9]'),'_DB52e_star/bcodes/stage_combinations/non_m_minus_fl_ml.tsv'))})
+
+##Write all except asexual for dexseq
+stg_strn_deu_tbls %>%
+  setNames(sample_id_irods[1]) %>%
+  imap(., ~{.x %>%  filter(stage_deu %in% c('fh','fl','mh', 'ml')) %>% pull(cell_bc) %>% write(., paste0('data/processed/',str_remove(.y, '_.*'),'/',str_extract(.y, '5736STDY.*71..[0-9]'),'_DB52e_star/bcodes/stage_combinations/sexuals.tsv'))})
+
+##Write all except high expression for dexseq
+stg_strn_deu_tbls %>%
+  setNames(sample_id_irods[1]) %>%
+  imap(., ~{.x %>%  filter(stage_deu %in% c('fh','mh')) %>% pull(cell_bc) %>% write(., paste0('data/processed/',str_remove(.y, '_.*'),'/',str_extract(.y, '5736STDY.*71..[0-9]'),'_DB52e_star/bcodes/stage_combinations/sexuals_minus_fl_ml.tsv'))})
+
+```
+
+
+#### Stage & strain_qcd barcodes
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+
+stg_strn_qcd_deu_tbls <- map(stg_strn_deu_tbls, ~filter(.,!is.na(strain_qcd)))
+```
+
+#### Stage_strain_qcd barcodes - Strain_qcd barcodes already written out above
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+
+named_stg_strn_deu_tbls <- list(stg_strn_qcd_deu_tbls)%>% 
+  pmap(~{
+    ..1 %>%
+         group_split(stage_deu,strain_qcd)%>%
+         setNames(sort(unique(paste(..1$stage_deu, ..1$strain_qcd))))
+  })%>% setNames(sample_id_irods[1])
+
+##remove the tsv files in the folder first before writing to it
+system(paste0('rm /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/stage_strain_qcd_k8/*tsv'))
+  
+
+unlist(named_stg_strn_deu_tbls, recursive = F) %>%
+  imap(., ~write(.x$cell_bc, paste0('data/processed/',str_remove(.y, '_.*'),'/',str_extract(.y, '5736STDY.*71..[0-9]'),'_DB52e_star/bcodes/stage_strain_qcd_k8/', str_replace_all(str_remove(.y, '^.*\\.'), ' ', '_'), '.tsv')))
+```
+
+
+#### Transfer all barcodes to farm
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+for (cls in c('stage', 'stage_strain_qcd_k8', 'stage_combinations')) {
+  system(
+    # paste0('rsync -av --include="*tsv" --exclude="*" --delete /Users/jr35/Google\\ Drive/My\\
+    paste0('rsync -av --delete /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/',cls, ' jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/msc14/5736STDY11771546_DB52e_star/bcodes/')
+  )
+}
+
+
+```
