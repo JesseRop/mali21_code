@@ -1,0 +1,3154 @@
+---
+title: "MSC strain deconvolution"
+date: '2022-07-11'
+author: 'Jesse Rop'
+output:
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+---
+
+
+```{r, message=FALSE}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr) 
+  library(stringr)
+  library(purrr)
+  library(readr)
+  library(tibble)
+  library(ggplot2)
+  library(tidyr)
+  library(cowplot)
+  library(pheatmap)
+  library(rmarkdown)
+  library('vcfR')
+  library(conflicted)
+  library(RColorBrewer)
+  library(MetBrewer)
+  library(ComplexHeatmap)
+  library(SeqArray)
+  library(ggrepel)
+  library(ggvenn)
+  library(magick)
+  library(VariantAnnotation)
+  library(gridExtra)
+  library(Matrix)
+  library(UpSetR)
+  library(SNPRelate)
+  library(openxlsx)
+  
+  conflict_prefer("select", "dplyr")
+  conflict_prefer("filter", "dplyr")
+  conflict_prefer("rename", "dplyr")
+})
+```
+
+
+# MSC parasites strain deconvolution and VCF visualization 
+
+## Variable declarations
+
+```{r}
+##Strain cluster colours
+strain_cols <- c(met.brewer(name = 'Austria')[c(1,7, 4,5,6)], 'light gray')
+
+strain_cols_o_i <-c("#910000", "#f20000", "#007c71", "#00f2dd", "#c39a00", "#ffd94d", "#7570B3","#708db3", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","#a40000" , "#00b7a7", "#ffcd12", 'black', 'lavender', 'lightgray', 'grey')
+names(strain_cols_o_i) <- c('G1_o', 'G1_i','G2_o',  'G2_i', 'G3_o',  'G3_i', 'G2_G1', 'G2_G3', 'G3_G1', 'G1_p_i','G1_b', 'G2_b', 'G3_b', 'G1', 'G2', 'G3', 'Doublet', 'G1_3i','Negative',  'Less5')
+strain_cols_n <-c("#910000", "#ff1a8d", "#007c71", "#0ea300", "#00deca", "#9a96c7", "#5d57a4", "#a8875b","#708db3", "#c39a00", "#ffd94d", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","thistle","#a40000" , "#00b7a7", "#e7f1f9", 'black', 'grey')
+#, 'lavender', 'lightgray', 'grey'
+names(strain_cols_n) <- c('SC2', 'SC1','SC5',  'SC4', 'SC3',  'SC6', 'SC7', 'SC8', 'S3_S1', 'S1_p_i','S1_b', 'S2_b', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'SC1_3i','Negative', 'Lab', 'Less5', NA)
+
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Atlas' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle'
+)
+
+
+donor_cols_m = met.brewer("Egypt")[c(2,4,1,3)] %>% set_names(paste0(c("msc1", "msc3","msc13","msc14"), '.mrna'))
+donor_cols = met.brewer("Egypt")[c(2,4,1,3)] %>% set_names(c("msc1", "msc3","msc13","msc14"))
+
+stg_refnd_lvls = c('Early ring','Late ring','Early trophozoite','Late trophozoite','Early schizont','Late schizont', "Gametocyte (committed)","Gametocyte (developing)","Gametocyte (branching)", "Female (low count)", "Female (high count)" , "Gametocyte (early female)","Gametocyte (late female)","Male (low count)", "Male (high count)", "Gametocyte (early male)","Gametocyte (late male)", "Unassigned", "Failed QC", "Not assigned") %>% str_to_sentence(.)
+
+trip="Mali"
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = paste0('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/',trip,'/'))
+```
+
+
+
+```{r}
+
+# system(paste0("hmmIBD -i ibd_analysis/msc14.strain_qcd_cln_gt.tsv  -o ibd_analysis/tr -m 100000"))
+
+##Sample names
+# sample_name_nms <- c("msc33", "msc48","msc49", "msc55", "msc60", "msc66") %>% sort()
+sample_name_nms <- c("msc1", "msc3","msc13","msc14") %>% str_sort(numeric = T)
+sample_name <- c("msc1", "msc3","msc13","msc14") %>% str_sort(numeric = T)
+
+
+##Sample irods IDs
+# source_irods_nms <- list("5736STDY13782211","5736STDY13782212","5736STDY13782213","5736STDY13782214","5736STDY13782215", "5736STDY13437393") %>% set_names(sample_name_nms)
+
+# source_irods_nms <- list("5736STDY11771535","5736STDY11771536","5736STDY11771544") %>% set_names(sample_name_nms)
+
+
+# sample_ids <- paste0(sample_name_nms, '_', source_irods_nms) %>% set_names(sample_name_nms)
+# sample_ids <- paste0(sample_name_nms, '_', source_irods_nms) %>% set_names(sample_name_nms)
+# optimum_k = c(8,6, 4,5,5,10) %>% set_names(sample_name_nms)
+optimum_k = c(5,2,2,8) %>% set_names(sample_name_nms)
+
+## sorted donor_opt_cluster names
+sorted_names <- paste0(sample_name, "_", optimum_k)
+
+grps <- c('stage_afm_strain_qcd', 'stage_ag_strain_qcd', 'strain_qcd')
+
+trip = 'Mali'
+
+##Alignment incorporation
+algn_nms = c('minmap', 'hsat')
+algn_nm = 'minmap'
+
+
+sample_name_nms_al <- rep(sample_name_nms, 2)
+algn_nms_al <- rep(algn_nms, each= length(sample_name_nms))
+
+sm_aln_nms_al <- paste(rep(sample_name_nms, 2), rep(algn_nms, each= length(sample_name_nms)), sep ='_')
+
+donor_cols_m_lcase = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("msc1", "msc3", "msc13", "msc14" ), '.mrna'))
+# donor_cols = met.brewer("Egypt")[c(2,4,1,3)] %>% set_names(paste0(c("msc1", "msc3", "msc13", "msc14" )))
+donor_cols_lcase = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("msc1", "msc3", "msc13", "msc14" )))
+
+donor_cols_m = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ), '.mrna'))
+# donor_cols = met.brewer("Egypt")[c(2,4,1,3)] %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" )))
+donor_cols = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" )))
+
+
+```
+
+
+```{r, eval=T}
+##Copy souporcell files for the optimum clusters
+
+
+# for (k in c(6,8)) {
+# for (smpl in c('stage_afm_strain_qcd', 'stage_ag_strain_qcd', 'strain_qcd')) {
+for (id in sample_name_nms) {
+    for (smpl in grps) {
+    # for (smpl in c('stage_afm_strain')) {
+      for (a in 1:length(algn_nms)) {
+        # for (p in c(1,2)) {
+        for (p in c(1)) {
+          # for (al in c("multiallelic", "biallelic")) {
+          system(paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/', id,'/pbulk_gtypes/',smpl,'_k', optimum_k[id], '_',algn_nms[a],'/p', p)
+            )
+          system(paste0('rsync -av --include=\'*.vcf\' --include=\'vartrix*\' --include=\'vartrix*\\/SC*\' --include=\'vartrix*\\/D*\'  --include=\'vartrix*\\/N*\' --include=\'vartrix*\\/P*\' --exclude=\'*\' jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/',trip,'/data/processed/DB52e_star/', id,'/pbulk_gtypes/',smpl,'_k', optimum_k[id], '_',algn_nms[a],'/p', p, '/ /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',id,'/pbulk_gtypes/',smpl,'_k', optimum_k[id], '_',algn_nms[a],'/p', p)
+            )
+        }
+      }
+    }
+}
+
+```
+
+
+VCF to GDS conversion
+```{r, eval=T}
+##Read in the genotypes and annotate
+
+gt_ss_afm_p1_bi <-pmap(list(sample_name_nms, optimum_k), ~{
+  sm <- ..1
+  gp <- ..2
+  map(grps, ~seqVCF2GDS(paste0("/Users/jr35/Google\ Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/", sm ,"/pbulk_gtypes/", .x,"_k", gp,"_", algn_nm,"/p1/fb_biallelic.vcf"), paste0("/Users/jr35/Google\ Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/", sm ,"/pbulk_gtypes/", .x,"_k", gp,"_", algn_nm,"/p1/fb_biallelic.gds"),  storage.option="ZIP_RA")
+)
+})
+
+```
+
+Prepare table for highly informative SNPs table for making bam files in farm by adding gene postions and formating appropriately for the format required by farm scripts
+
+```{r, message=FALSE}
+##Metadata from all p.falciparum genes downloaded from plasmoDB
+Pf3D7_genes_plasmoDB <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3d7_Genes_Summary_270922.csv") %>% 
+  dplyr::rename("gene_id" = `Gene ID` ) %>% 
+  group_by(gene_id) %>% 
+  add_count(name='gn_iso') %>% 
+  ungroup() %>%
+  mutate(across(gene_id, ~case_when(gn_iso>1 ~ source_id,
+                                    TRUE ~ as.character(.)))) %>% 
+  mutate(across(gene_id, ~str_replace(.,"_", "-")))%>%
+  dplyr::rename('Gene_name' = `Gene Name or Symbol`, 'Ka_Ks' = `NonSyn/Syn SNP Ratio All Strains`, 'TM_domains'=`# TM Domains`) %>% 
+  mutate(across(where(is.character), ~na_if(., "N/A")),
+         Gene = coalesce(`Gene_name`, gene_id)
+  )  %>%
+  group_by(Gene) %>% 
+  add_count() %>% 
+  ungroup() %>%
+  mutate(across(Gene, ~case_when(n>1 ~ paste0(.,'_', gene_id),
+                                 TRUE ~ as.character(.))))
+'/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/data/processed/DB52e_star/msc14/pbulk_gtypes/stage_'
+```
+
+
+
+```{r, results="hide"}
+##Merge SNP information above with annotations from plasmoDB to get gene positions etc for plotting
+# dp  %>% filter_if(any(!is.na()))
+gene_n_pos <- Pf3D7_genes_plasmoDB %>% 
+  mutate(
+    chr = str_extract(`Genomic Location (Gene)`, '.*v3'), 
+    gn_start = str_remove_all(`Genomic Location (Gene)`, '.*v3:|,|\\.\\..*'), 
+    gn_end = str_remove_all(`Genomic Location (Gene)`, '.*\\.\\.|,|\\(.*')
+  ) %>%
+  mutate(across(c(gn_start, gn_end), ~as.numeric(.))) %>% 
+  dplyr::select(gene_id, chr, gn_start, gn_end, Gene) 
+
+# write_csv(strain_top_snps, '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali2/data/processed/DB52e_star/strain_top_snps.csv')
+
+```
+
+
+
+filter pf7 variants
+```{r}
+
+pf7_waf <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/pf7_data/pf7_variants/AF-W-freqs.csv")
+
+pf7_waf %>% 
+  filter(is_invariant == F &  is_biallelic == T & minor_af > 0.3 & major_af < 0.7) %>% dim
+
+pf7_waf_all <- data.table::fread("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/pf7_data/waf/Pf3D7_v3_g.txt")
+
+pf7_waf_all_snp_qc <- pf7_waf_all %>% dplyr::select(V1, V2,V3,V4, paste0('V', c(11:17))) %>% rename(c('chrom' = V1, 'pos'=V2, 'ref'=V3, 'alt'=V4, 'filter'=V11,'type'=V12, 'VQSLOD'=V13,   'CDS'=V14, 'AC'=V15, 'AN'=V16, 'AF'=V17)) %>%  mutate(pf_all = 'yes')
+
+```
+
+filter pf7 variants
+```{r}
+
+pf7_mali <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/pf7_data/pf7_variants/Mali-freqs.csv")
+
+pf7_mali_ibd_whitelst <- pf7_mali %>% 
+  filter(is_invariant == F &  is_biallelic == T & minor_af > 0.1)
+
+# pf7_waf <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/pf7_variants/AF-W-freqs.csv")
+# 
+# pf7_waf_ibd_whitelst <- pf7_waf %>% 
+#   filter(is_invariant == F &  is_biallelic == T & minor_af > 0.1)
+
+```
+
+
+filter pf7 all variants
+```{r}
+
+pf7_mali_all <- data.table::fread("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/pf7_data/pf7_variants/all_variants.txt")
+
+pf7_mali_all_snp_qc <- pf7_mali_all %>% dplyr::select(V1, V2, V10, V11, V12,  V13, V14, V15, V16) %>% rename(c('chrom' = V1, 'pos'=V2, 'filter'=V10, 'type'=V11, 'VQSLOD'=V12, 'CDS'=V13, 'AC'=V14, 'AN'=V15, 'AF'=V16)) %>%  mutate(pf_all = 'yes')
+
+
+pf7_mali_only <- data.table::fread("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/pf7_data/pf7_variants/Pf3D7_v3_g_bisplit.txt", na.strings='.')
+pf7_mali_only_snp_qc <- pf7_mali_only %>% dplyr::select(V1, V2,V3,V4, paste0('V', c(11:17))) %>% rename(c('chrom' = V1, 'pos'=V2, 'ref'=V3, 'alt'=V4, 'filter'=V11,'type'=V12, 'VQSLOD'=V13,   'CDS'=V14, 'AC'=V15, 'AN'=V16, 'AF'=V17)) %>%  mutate(pf_all = 'yes')
+
+pf7_mali_only_nmajor001 <- data.table::fread("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/pf7_data/pf7_variants/Pf3D7_v3_g_pass_bisplit_snp_001.txt", na.strings='.')
+pf7_mali_only_nmajor001_snp_qc <- pf7_mali_only_nmajor001 %>% dplyr::select(V1, V2,V3,V4, paste0('V', c(11:17))) %>% rename(c('chrom' = V1, 'pos'=V2, 'ref'=V3, 'alt'=V4, 'filter'=V11,'type'=V12, 'VQSLOD'=V13,   'CDS'=V14, 'AC'=V15, 'AN'=V16, 'AF'=V17)) %>%  mutate(pf_all = 'yes')
+
+```
+
+
+```{r}
+##Write pf7 snps for sekou
+pf7_mali_only_snp_qc %>% filter(type == "SNP" & filter == "PASS") %>% write_csv(., "/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/collaborators/sekou_files/pf7_mali_only_snp_qc_pass.csv")
+```
+
+###########k8_raw
+```{r}
+## Function to read in the genotypes and annotate
+
+gds_rd <- function(sample_id, grp, opt_k){  
+  
+  p1_bi <- seqOpen(paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/", sample_id ,"/pbulk_gtypes/", grp, "_k", opt_k,"_", algn_nm,"/p1/fb_biallelic.gds"), allow.duplicate=T)
+  print(paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/", sample_id ,"/pbulk_gtypes/", grp, "_k", opt_k,"_", algn_nm,"/p1/fb_biallelic.gds"))
+  
+  print(head(seqGetData(p1_bi, "allele")))
+  # print(head(seqGetData(p1_bi, "$dosage")))
+  # print(head(seqGetData(p1_bi, "annotation/format/QR")))
+
+  gtypes_p1_bi <- base::rbind(seqGetData(p1_bi, "allele"), seqGetData(p1_bi, "annotation/qual"),seqGetData(p1_bi, "chromosome"), seqGetData(p1_bi, "position"), seqGetData(p1_bi, "annotation/info/DP"), seqGetData(p1_bi, "annotation/filter"), seqGetData(p1_bi, "$dosage"), seqGetData(p1_bi, "annotation/format/DP"), seqGetData(p1_bi, "annotation/format/QR"), seqGetData(p1_bi, "annotation/format/QA")) %>% t()
+  
+  seqClose(p1_bi)
+  print(gtypes_p1_bi[1:5,1:5])
+  
+  strn_nms <- seqVCF_SampID(paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/", sample_id ,"/pbulk_gtypes/", grp, "_k", opt_k,"_", algn_nm,"/p1/fb_biallelic.vcf")) %>% str_replace_all(c("PoorQC"="P", "Low_n"="Lo", "Female"="F", "Male" = "M", "Asexual" = "A", "Gametocyte" = "G"))
+  
+  colnames(gtypes_p1_bi) <- c('alleles', 'quality', 'chrom', 'pos', 'depth', 'filt', strn_nms, paste0(strn_nms, rep(c('_DP','_RefN', '_AltN'), each=length(strn_nms))))
+
+  return(gtypes_p1_bi)
+  
+}
+```
+
+
+###########k8_raw stage_afm_strain
+```{r}
+##Read in the genotypes and annotate
+# gt_ss_afm_p1_bi <- gds_rd(sample_id = "msc48_5736STDY13782212", grp = "stage_afm_strain_k6_minimp")
+
+gt_ss_afm_p1_bi <-pmap(list(sample_name_nms, optimum_k), ~{
+  sm <- ..1
+  k <- ..2
+  map(grps, ~gds_rd(sample_id = sm, grp = .x, opt_k=k)) %>% set_names(paste0(..1 ,'.', grps))
+  
+})
+```
+
+###########k8_raw strain
+```{r}
+# ##k8 raw strain stage labels
+# k6r_s_vcf_ids <- c("SC7", "SC6", "SC5", "SC3", "SC2", "SC1", "Doublet")
+# 
+# ##Read in the genotypes and annotate
+# gt_s_k6r_p1_bi <- gds_rd(gds_path = "strain_qcd_k8_minimp/p1/fb_biallelic.gds", strn_nms = k6r_s_vcf_ids)
+# dim(gt_s_k6r_p1_bi)
+```
+
+```{r}
+##soupo k6
+#seqClose(fb_p1_bi)
+
+##Replace the clean cells genotype with the raw cells genotype
+# gtypes_fb_p1_bi <-gt_ss_k6r_p1_bi
+```
+
+```{r}
+##remove doublets as well
+# gt_fb_vtx_p1_cx_bi <- gtypes_fb_p1_cx_bi %>% 
+#   as.data.frame() %>% 
+#   dplyr::select(!contains('Doublet')) %>%
+#   dplyr::select(!contains('G1_i_F')) %>%
+#   mutate(across(c(pos, depth, quality, matches('^DP.*|^Ref.*|^Alt.*'), matches('.*sNum$|.*cProp$')), as.numeric)) %>%
+#   filter(quality>75 & depth>40)  #%>%
+#   #filter(!(quality>200 & depth>30)
+```
+
+###k6 Clean
+```{r}
+# list.files("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/pbulk_gtypes/stg_strn_k8_minimp_qcd/p1/vartrix_biallelic/", pattern = "S.*.mtx", full.names = T, recursive = T, include.dirs = T) 
+```
+
+
+Vartrix matrix to get number of molecules supporting either reference or alternate allele - all
+
+```{r}
+##Function to read vartrix output and annotate
+vtx_rd <- function(sample_id, grp, opt_k ){
+  
+  ##Read in the alternate allele matrix for all the stg/strn combinations and combine into a list - also shortening the names of the matrices (list items)
+  alt_mtx <- list.files(paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/", sample_id ,"/pbulk_gtypes/", grp, "_k", opt_k, "_", algn_nm,"/p1/vartrix_biallelic/"), pattern = "^[D|SC|G|P|N].*.mtx", full.names = T, recursive = T, include.dirs = T) %>% 
+    set_names(nm = (str_remove_all(.,paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/", sample_id ,"/pbulk_gtypes/", grp, "_k", opt_k, "_", algn_nm,"/p1/vartrix_biallelic/", '/|.mtx')) %>% str_replace_all(c("PoorQC"="P", "Low_n"="Lo", "Female"="F", "Male" = "M", "Asexual" = "A", "Gametocyte" = "G", "_a_" = "_A_"))  %>%  tools::file_path_sans_ext())) %>%
+    map(readMM) 
+  
+  ##Count, for each SNP, the total alternate allele count over all cells and proportion of cell that have alternate allele - Using base R because it is faster
+  alt_mtx_stats = lapply(alt_mtx, function(x) base::cbind(x, rowSums(x) , rowSums(x != 0)/ncol(x))[,c(ncol(x)+1, ncol(x)+2)])
+  
+  print(c("1", sample_id, grp))
+  
+  ##Name the matrix columns with the name of the stg/strn and suffix of snpNum (total snp count over all cell) and celProp (proportion of cell that have alternate allele)
+  nmd_alt_mt<- lapply(names(alt_mtx_stats), function(x) {
+       colnames(alt_mtx_stats[[x]]) <- paste0(x, c('_sNum', '_cProp'))
+       as.matrix(alt_mtx_stats[[x]])
+   })
+  
+  print(c("2", sample_id, grp))
+  
+  nmd_alt_mt <- do.call(base::cbind, nmd_alt_mt) 
+  print(c("finito", sample_id, grp))
+  return(nmd_alt_mt)
+  
+}
+
+```
+
+
+```{r}
+##Function to read vartrix output and annotate
+# a=list.files(paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/msc14/pbulk_gtypes/stage_afm_strain_qcd_k8_minmap/p1/vartrix_biallelic/"), pattern = "^[D|SC|G|P|N].*.mtx", full.names = T, recursive = T, include.dirs = T) %>% 
+#     set_names(nm = (str_remove_all(.,paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/",trip,"/data/processed/DB52e_star/msc14/pbulk_gtypes/stage_afm_strain_qcd_k8_minmap/p1/vartrix_biallelic/", '/|.mtx')) %>% str_replace_all(c("PoorQC"="P", "Low_n"="Lo", "Female"="F", "Male" = "M", "Asexual" = "A", "Gametocyte" = "G", "_a_" = "_A_"))  %>%  tools::file_path_sans_ext())) %>%
+#     map(readMM) 
+#   
+#   ##Count, for each SNP, the total alternate allele count over all cells and proportion of cell that have alternate allele - Using base R because it is faster
+#   alt_mtx_stats = lapply(a, function(x) base::cbind(x, rowSums(x) , rowSums(x != 0)/ncol(x))[,c(ncol(x)+1, ncol(x)+2)])
+#   
+#   ##Name the matrix columns with the name of the stg/strn and suffix of snpNum (total snp count over all cell) and celProp (proportion of cell that have alternate allele)
+#   nmd_alt_mt<- lapply(names(alt_mtx_stats), function(x) {
+#        colnames(alt_mtx_stats[[x]]) <- paste0(x, c('_sNum', '_cProp'))
+#        as.matrix(alt_mtx_stats[[x]])
+#    })
+#   
+#   nmd_alt_mt <- do.call(base::cbind, nmd_alt_mt) 
+#   
+# }
+
+```
+
+
+###########k8_raw stage_afm_strain
+```{r}
+##Read in the genotypes and annotate
+# gt_ss_afm_p1_bi <- gds_rd(sample_id = "msc48_5736STDY13782212", grp = "stage_afm_strain_k6_minimp")
+
+ss_afm_vtx_mtx <-pmap(list(sample_name_nms, optimum_k), ~{
+  sm <- ..1
+  k <- ..2
+  map(grps, ~vtx_rd(sample_id = sm, grp = .x, opt_k=k)) %>% set_names(paste0(..1 ,'.', grps))
+})
+```
+
+###########k8_raw -TO BE DELETED IF RAW NOT PREFERED
+
+```{r}
+##Function to read stage afm + strain (ss) k8 raw (r) vartrix output and annotate
+# ss_afm_vtx_mtx <- vtx_rd(sample_id = "msc48_5736STDY13782212", grp = "stage_afm_strain_k6_minimp")
+
+```
+
+```{r}
+##Function to read stage ag + strain (ss) k8 raw (r) vartrix output and annotate
+# ss_ag_k6r_vtx_mtx <- vtx_rd(vtx_path = 'stage_ag_strain_qcd_k8_minimp/p1/vartrix_biallelic/')
+
+```
+
+```{r}
+##Function to read strain (s) k8 raw vartrix output and annotate
+# s_k6r_vtx_mtx <- vtx_rd(vtx_path = 'strain_qcd_k8_minimp/p1/vartrix_biallelic/')
+
+```
+
+
+Combine vartix snp count per cell with freebayes calls
+```{r}
+##remove doublets as well and low quality SNPS - maybe not include doublets in variant calling with freebayes. Adds no value? or could be used to demonstrate high number of non-distinct and rule out small clusters as doublets and be part of QC
+# fb_vt_bind <- function(fb_gtype , vtx_mtx ) {
+#   gt_fb_vtx_p1_bi <- base::cbind(fb_gtype, vtx_mtx) %>% 
+#     as.data.frame() %>% 
+#     mutate(across(c(pos, depth, quality, matches('.*_DP$|.*_RefN$|.*_AltN$|.*sNum$|.*cProp$')), as.numeric)) %>%
+#     filter(quality>75 & depth>40)  
+#   
+#   print(dim(gt_fb_vtx_p1_bi))
+#   
+#   ##remove  mitochondrial calls
+#   gt_fb_vtx_p1_bi <- gt_fb_vtx_p1_bi %>%
+#     filter(!str_detect(chrom, 'Pf_M'))
+#   
+#   print(dim(gt_fb_vtx_p1_bi))
+#   
+#   return(gt_fb_vtx_p1_bi)
+#   
+# }
+
+# Same as above but option to remove some groups  
+
+##remove doublets as well and low quality SNPS - maybe not include doublets in variant calling with freebayes. Adds no value? or could be used to demonstrate high number of non-distinct and rule out small clusters as doublets and be part of QC
+fb_vt_bind <- function(fb_gtype , vtx_mtx, rm_grps="None" ) {
+  gt_fb_vtx_p1_bi <- base::cbind(fb_gtype, vtx_mtx) %>% 
+    as.data.frame() %>% 
+    mutate(across(c(pos, depth, quality, matches('.*_DP$|.*_RefN$|.*_AltN$|.*sNum$|.*cProp$')), as.numeric)) %>%
+    dplyr::select(-c(matches(rm_grps))) %>%
+    filter(if_any(starts_with('SC'), ~!is.na(.))) %>%
+    # filter(quality>75 & depth>40)  %>%
+    mutate(filt_reason1 = case_when(quality<=75 | depth<=40 ~ 'Low quality',
+                                    str_detect(chrom, 'Pf_M') ~ 'Mt'))
+  
+  print(dim(gt_fb_vtx_p1_bi))
+  print(table(gt_fb_vtx_p1_bi$filt_reason1, useNA = 'ifany'))
+  
+  ##remove  mitochondrial calls
+  # gt_fb_vtx_p1_bi <- gt_fb_vtx_p1_bi %>%
+    # filter(!str_detect(chrom, 'Pf_M'))%>%
+    # mutate(filt_reason1 = case_when(str_detect(chrom, 'Pf_M') ~ 'Mt'))
+  
+  print(dim(gt_fb_vtx_p1_bi))
+  
+  return(gt_fb_vtx_p1_bi)
+}
+```
+
+
+
+```{r}
+##strain stage k8 raw freebayes vcf + vatrix high quality no mitochondrial DNA
+# ss_k6r_fb_vtx_p1bi <- fb_vt_bind(fb_gtype = gt_ss_k6r_p1_bi, vtx_mtx = ss_k6r_vtx_mtx, rm_grps = paste(c("SC8_F", "SC8_A", "SC7_A", "SC1_M", "SC1_F", "SC4_F", "SC4_M", "SC5_A.*"), collapse = '.*|'))
+```
+
+```{r}
+##strain stage k8 raw freebayes vcf + vatrix high quality no mitochondrial DNA
+ss_afm_fb_vtx_p1bi <- pmap(list(unlist(gt_ss_afm_p1_bi, recursive = F), unlist(ss_afm_vtx_mtx, recursive = F)), ~fb_vt_bind(fb_gtype = ..1, vtx_mtx = ..2))
+```
+
+```{r}
+##strain stage k8 raw freebayes vcf + vatrix high quality no mitochondrial DNA
+# ss_ag_k6r_fb_vtx_p1bi <- fb_vt_bind(fb_gtype = gt_ss_ag_k6r_p1_bi, vtx_mtx = ss_ag_k6r_vtx_mtx)
+```
+
+```{r}
+##strain k8 raw freebayes vcf + vatrix high quality no mitochondrial DNA
+# s_k6r_fb_vtx_p1bi <- fb_vt_bind(fb_gtype = gt_s_k6r_p1_bi, vtx_mtx = s_k6r_vtx_mtx)
+```
+
+
+VCF with minimum alternate allele fraction being 0.2 and ploidy 1 - NOT USED
+```{r}
+##Filter to retain those genotypes where the sum of quality for either alternate or reference alleles is > 50
+# 
+# gt_fb_vtx_p1_bi_qc_q <- gt_fb_vtx_p1_bi_qc %>%
+#   mutate(G1_i_A_qc = case_when(G1_i_A_RefN >50 |G1_i_A_AltN >50 ~ G1_i_A_qc),
+#          # G1_i_F_qc = case_when(G1_i_F_RefN >50 |G1_i_F_AltN >50 ~ G1_i_F_qc),
+#          G1_i_F_qc = case_when(G1_i_F_RefN >50 |G1_i_F_AltN >50 ~ G1_i_F_qc),
+#          G1_o_A_qc = case_when(G1_o_A_RefN >50 |G1_o_A_AltN >50 ~ G1_o_A_qc),
+#          G1_o_F_qc = case_when(G1_o_F_RefN >50 |G1_o_F_AltN >50 ~ G1_o_F_qc),
+#          G1_o_M_qc = case_when(G1_o_M_RefN >50 |G1_o_M_AltN >50 ~ G1_o_M_qc),
+#          G2_i_A_qc = case_when(G2_i_A_RefN >50 |G2_i_A_AltN >50 ~ G2_i_A_qc),
+#          G2_i_F_qc = case_when(G2_i_F_RefN >50 |G2_i_F_AltN >50 ~ G2_i_F_qc),
+#          G2_i_M_qc = case_when(G2_i_M_RefN >50 |G2_i_M_AltN >50 ~ G2_i_M_qc),
+#          G2_o_F_qc = case_when(G2_o_F_RefN >50 |G2_o_F_AltN >50 ~ G2_o_F_qc),
+#          G2_o_M_qc = case_when(G2_o_M_RefN >50 |G2_o_M_AltN >50 ~ G2_o_M_qc),
+#          G3_i_A_qc = case_when(G3_i_A_RefN >50 |G3_i_A_AltN >50 ~ G3_i_A_qc),
+#          G3_o_F_qc = case_when(G3_o_F_RefN >50 |G3_o_F_AltN >50 ~ G3_o_F_qc),
+#          G3_o_M_qc = case_when(G3_o_M_RefN >50 |G3_o_M_AltN >50 ~ G3_o_M_qc),
+#          Doublet_A_qc = case_when(Doublet_A_RefN >50 |Doublet_A_AltN >50 ~ Doublet_A_qc)#,
+#          # Doublet_A_qc = case_when(RefN_Doublet_A - AltN_Doublet_A >20 ~ Doublet_A)
+#          ) #%>%
+#   #filter(!if_all(ends_with('_qc'), ~ is.na(.)))
+
+```
+
+## SNPS from the pf7 paper without filtering
+
+```{r}
+##soupo k6 with pf7 all variants including poor quality
+
+gt_pf7_merge <- function(gt_tbl){  
+  gt_pf7_mali <- pf7_mali_only_snp_qc %>% 
+  left_join(gt_tbl,., by = c("chrom", "pos"), multiple = "all")
+  
+  grpd_tbl <- gt_pf7_mali %>% group_by(chrom,pos) %>% mutate(across(type, ~factor(., levels = c('SNP', 'INDEL', 'OVERLAP')))) %>% arrange(type, .by_group = T) %>% arrange(dplyr::desc(AF), .by_group = T) 
+    
+  grpd_tbl %>% dplyr::select(c('chrom', 'pos','alleles','ref', 'alt',  'type', 'AF', 'AC')) %>% dim() %>% print()
+  
+  return(gt_pf7_mali)
+}
+
+```
+
+```{r}
+##strain stage k8 raw genotypes merge with pf Mali
+
+ss_afm_pf7_mali <- map(ss_afm_fb_vtx_p1bi, ~gt_pf7_merge(gt_tbl=.x))
+
+```
+
+```{r}
+##strain stage k8 raw genotypes merge with pf Mali
+
+# ss_ag_k6r_pf7_mali <- gt_pf7_merge(gt_tbl=ss_ag_k6r_fb_vtx_p1bi, gt_tbl_nm='ss_ag_k6r_pf7_mali')
+```
+
+```{r}
+##strain stage k8 raw genotypes merge with pf Mali
+
+# s_k6r_pf7_mali <- gt_pf7_merge(gt_tbl=s_k6r_fb_vtx_p1bi, gt_tbl_nm='s_k6r_pf7_mali')
+```
+
+
+```{r}
+##Visualize the distribution of SNPs, INDELs and overlaps within the split multi-alleles
+
+ss_afm_pf7_mali[[1]] %>%  group_by(chrom,pos) %>% mutate(across(type, ~factor(., levels = c('SNP', 'INDEL', 'OVERLAP')))) %>% arrange(type, .by_group = T) %>% arrange(dplyr::desc(AF), .by_group = T) #%>% View()
+
+# s_k6r_pf7_mali %>% group_by(chrom,pos) %>% mutate(across(type, ~factor(., levels = c('SNP', 'INDEL', 'OVERLAP')))) %>% arrange(type, .by_group = T) %>% arrange(dplyr::desc(AF), .by_group = T) %>% distinct(., pick(chrom, pos), .keep_all = T) %>% dplyr::select(c('chrom', 'pos','alleles','ref', 'alt',  'type', 'AF', 'AC')) %>% View()
+```
+
+```{r}
+##Select only the SNP record from the split alleles and if more than one SNP in position then keep the most frequent alternate allele - distinct keeps the first row. No big difference when we dont first sort by type and just choose the most frequent alternate allele - SNP still top except for around 6 where indel swaps with SNP
+## In vcf drop non-mali alleles, split after pass filter then select SNPs from this and maybe filter by allele frequency if too many SNPs
+# merge with SNPs only after spliting
+
+pf7_snps_qc_multitop <- function(gt_pf7_mali) {
+  
+  pf7_mali_nqc_snptop <- gt_pf7_mali %>% group_by(chrom,pos) %>% mutate(across(type, ~factor(., levels = c('SNP', 'INDEL', 'OVERLAP')))) %>% arrange(type, .by_group = T) %>% arrange(dplyr::desc(AF), .by_group = T) %>% distinct(., pick(chrom, pos), .keep_all = T) %>% ungroup()
+  
+}
+
+
+```
+
+```{r}
+##strain k8 raw genotypes merge with pf7M (pf7Mali) retaining only the top SNPs from the Mali dataset where there are complex alleles with overlaps with indel etc
+
+ss_afm_pf7M_snptop <- map(ss_afm_pf7_mali, ~pf7_snps_qc_multitop(gt_pf7_mali=.x))
+```
+
+```{r}
+##strain k8 raw genotypes merge with pf7M (pf7Mali) retaining only the top SNPs from the Mali dataset where there are complex alleles with overlaps with indel etc
+
+# ss_ag_k6r_pf7M_snptop <- pf7_snps_qc_multitop(gt_pf7_mali=ss_ag_k6r_pf7_mali)
+```
+
+```{r}
+##strain k8 raw genotypes merge with pf7M (pf7Mali) retaining only the top SNPs from the Mali dataset where there are complex alleles with overlaps with indel etc
+
+# s_k6r_pf7M_snptop <- pf7_snps_qc_multitop(gt_pf7_mali=s_k6r_pf7_mali)
+```
+
+
+```{r}
+##Jacob filtered SNPs - some missing in MSC14
+m14_pf7_prep_viz <- function(m14_gt, pf7_base = pf7_mali) {
+  
+  m14_pf7_all_jcb <- pf7_mali %>% 
+    mutate(pf7_jcb = 'yes') %>%
+    left_join(m14_gt,., by = c("chrom" = "chromosome", "pos" = "position"))  %>% 
+    dplyr::select(c(chrom, pos, depth, type, filter,VQSLOD,CDS,AC,AN,AF, pf_all, quality, ends_with('_qc'), pf7_jcb,filt_reason1))%>% 
+    mutate(p_dset = case_when(pf_all == 'yes' & pf7_jcb == 'yes' ~ 'm14_pAll_pJcb', 
+                              pf_all == 'yes' & is.na(pf7_jcb) ~ 'm14_pAll', 
+                              is.na(pf_all) & pf7_jcb == 'yes' ~ 'm14_pJcb', 
+                              is.na(pf_all) & is.na(pf7_jcb)  ~ 'm14')) 
+  
+  m14_pf7_all_jcb %>% dplyr::count(p_dset, type, filter) %>%
+    print()
+  
+  plt<- m14_pf7_all_jcb  %>% dplyr::count(p_dset, type, filter) %>% 
+    filter(n>1) %>%
+    mutate(across(filter, ~str_replace_all(., c(';'= '\n','Hyp'= '\nHyp')))) %>% 
+    ggplot(., aes(x =p_dset, y=n, fill = type)) + 
+    geom_col(position = position_dodge(width = 1)) + 
+    facet_grid(.~filter) + 
+    theme(axis.text.x = element_text(angle=90), text = element_text(size = 14)) 
+    
+  print(plt)
+  
+  return(m14_pf7_all_jcb)
+  
+}
+```
+
+
+```{r, fig.height=5, fig.width=10}
+##strain stage k8 raw genotypes merge with pf Mali
+
+ss_afm_pf7M_jcb <- map(ss_afm_pf7M_snptop, ~m14_pf7_prep_viz(m14_gt=.x))
+```
+
+```{r, fig.height=5, fig.width=10}
+##strain stage k8 raw genotypes merge with pf Mali
+
+# ss_ag_k6r_pf7M_jcb <- m14_pf7_prep_viz(m14_gt=ss_ag_k6r_pf7M_snptop)
+```
+
+```{r, fig.height=5, fig.width=10}
+##strain stage k8 raw genotypes merge with pf Mali
+
+# s_k6r_pf7M_jcb <- m14_pf7_prep_viz(m14_gt=s_k6r_pf7M_snptop)
+```
+
+
+
+```{r}
+kas_togo_pf <- readxl::read_xlsx("data/raw/published_lit/kassegne_togo_pf_wgs/Table 1.XLSX", sheet = 'Table 1', skip = 1) %>% 
+  rename(c('chrom'='CHROMOSOME', 'pos'='POS')) %>% 
+  mutate(kas_togo = 'yes')
+```
+
+
+```{r, fig.height=5, fig.width=10}
+ss_afm_pf7M_jcb[[3]] %>% 
+  left_join(., kas_togo_pf, by = c('chrom', 'pos'))  %>% dplyr::count(pf_all, kas_togo)
+
+# ss_ag_k6r_pf7M_jcb %>% 
+#   left_join(., kas_togo_pf, by = c('chrom', 'pos')) %>% filter(is.na(filt_reason1)) %>% dplyr::count(pf_all, kas_togo)
+# 
+# s_k6r_pf7M_jcb %>% 
+#   left_join(., kas_togo_pf, by = c('chrom', 'pos')) %>% filter(is.na(filt_reason1)) %>% dplyr::count(pf_all, kas_togo)
+```
+
+
+```{r, fig.height=5, fig.width=10}
+regions_hyp <- read_delim("../Pf3D7_genomes_gtfs_indexs/pf7_data/regions-20130225.onebased.txt", col_names = F)
+regions_hyp <- regions_hyp %>% mutate(chrom = as.numeric(str_remove_all(X1, 'Pf3D7_|_v3')))
+```
+
+mark snps not in pf7 dataset
+```{r}
+##remove doublets as well and low quality SNPS - maybe not include doublets in variant calling with freebayes. Adds no value? or could be used to demonstrate high number of non-distinct and rule out small clusters as doublets and be part of QC
+pf7_hlght <- function(m14_gt ) {
+  pf7_h <-  m14_gt %>%
+    mutate(across(filt_reason1, ~case_when(is.na(.) & (filter != 'PASS' | is.na(filter)) ~ 'Absent in Pf7', 
+                                           is.na(.) ~ 'Pass',
+                                           T ~ as.character(.)))
+           ) 
+  
+  pf7_h %>% dplyr::count(filt_reason1)%>% print()
+  
+  return(pf7_h)
+}
+```
+
+
+```{r}
+ss_afm_pf7M_pf7qc <- map(ss_afm_pf7M_snptop, ~pf7_hlght(m14_gt=.x))
+```
+
+```{r}
+# ss_ag_k6r_pf7M_pf7qc <- pf7_hlght(m14_gt=ss_ag_k6r_pf7M_snptop)
+```
+
+```{r}
+# s_k6r_pf7M_pf7qc <- pf7_hlght(m14_gt=s_k6r_pf7M_snptop)
+```
+
+
+```{r, fig.height=4, fig.width=15}
+##Function for cleaner plot of SNPs falling in the different filter categories for each stage +/ strain cluster
+
+broadqc_lvls <- c('Pass', 'Absent in Pf7', 'Mt', 'Low quality')
+broadqc_cols <- met.brewer('Isfahan2')[c(2:4,1)] %>% set_names(broadqc_lvls)
+
+
+cln_plt_snp_filt_categ_pf7qc <- function(annot_snp_qc, filt_c = 'filt_reason1', xlb = 'Strain', qc_cols = broadqc_cols,  qc_lvls = broadqc_lvls, filt_rm=''){
+  
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+annot_snp_qc %>% 
+  filter(!(!!rlang::sym(filt_c) %in% filt_rm)) %>%
+  mutate(across(!!rlang::sym(filt_c), ~droplevels(factor(., levels = qc_lvls)))) %>%
+  # dplyr::count(groups, !!rlang::sym(filt_c), .drop=F) %>%
+    dplyr::count(!!rlang::sym(filt_c), .drop=F) %>%
+  # group_by(groups) %>% mutate(perc = round((n/sum(n))*100, digits = 1)) %>%
+    mutate(perc = round((n/sum(n))*100, digits = 1)) %>%
+  ggplot(aes(x=!!rlang::sym(filt_c),fill=!!rlang::sym(filt_c), y = n/1000)) + 
+  geom_col(position = position_dodge(width = 1)) + 
+  geom_text(aes(label=paste0(n, "(", perc,")"), color = !!rlang::sym(filt_c)), vjust = 0.5, hjust = -0.1, position = position_dodge(width = 1), size = 6.5, angle = 90, show.legend = F, fontface= 'bold') + 
+  scale_color_manual(values = qc_cols) +
+  scale_fill_manual(values = qc_cols) +
+  scale_y_continuous(expand = expansion(mult =c(0, 0.8))) + 
+  # facet_wrap(.~groups, nrow = 1,scales = "free_x", drop = T) +
+  labs(x = xlb, y = 'Number of SNPs (X 1e3)', fill = 'SNP category') +
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 14),
+        axis.title.x = element_blank(),
+        strip.text.x.top = element_text(size = 15, face='bold'),
+        axis.text.x = element_blank(),
+        axis.title = element_text(size = 18, face = 'bold'),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 18, face = 'bold'),
+        legend.position="bottom",
+        panel.border=element_rect(colour="grey",fill='transparent'),#,
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+      ) +
+    # coord_fixed()+
+    # coord_flip() +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+}
+```
+
+
+```{r}
+##!!!CHEATING - SORT OUT
+ss_afm_broadqc_plt <- map(ss_afm_pf7M_pf7qc, ~cln_plt_snp_filt_categ_pf7qc(annot_snp_qc = .x, filt_c = 'filt_reason1', xlb = 'Strain', qc_cols = broadqc_cols,  qc_lvls = broadqc_lvls, filt_rm=''))
+
+ss_afm_broadqc_plt
+
+```
+
+```{r}
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+# ss_ag_broadqc_plt <- cln_plt_snp_filt_categ_pf7qc(annot_snp_qc = ss_ag_k6r_pf7M_pf7qc, filt_c = 'filt_reason1', xlb = 'Strain', qc_cols = broadqc_cols,  qc_lvls = broadqc_lvls, filt_rm='')
+# ss_ag_broadqc_plt
+# 
+# s_k6r_broadqc_plt <- cln_plt_snp_filt_categ_pf7qc(annot_snp_qc = s_k6r_pf7M_pf7qc, filt_c = 'filt_reason1', xlb = 'Strain', qc_cols = broadqc_cols,  qc_lvls = broadqc_lvls, filt_rm='')
+# s_k6r_broadqc_plt
+
+```
+
+##Assess filtered SNPs
+
+```{r}
+##!!!! NOTE :Adding S to [G|D] [G|D|S] so as to detect the SC labeles in the k6 raw
+##!!!! NOTE :Using instead of gt_fb_vtx_p1_bi_qc_pf7 since we want to only look at SNPs in pf 7 Mali
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+# snp_qc_tbl <- gt_fb_vtx_p1_bi_qc_pf7 %>% rename_with( ~str_replace(., '$','_raw'), matches("^[G|D|S].*_[A-Z]$")) %>% dplyr::select(chrom, pos,
+
+snps_qc_filts <- function(m14_gt){
+  
+  snp_qc_tbl <- m14_gt %>% filter(filt_reason1 == 'Pass') %>% rename_with( ~str_replace(., '$','_raw'), matches("^(G|D|SC|P_|N).*(_A|_F|_M|_G|_Lo|_G|blet|tive|Unassigned|fail|[0-9])$")) %>% dplyr::select(chrom, pos, matches('.*_raw$|.*_qc$|.*_sNum$|.*_cProp$|.*_DP$|.*_RefN$|.*_AltN$'), type, filter,VQSLOD,CDS,AC,AN,AF, alleles)   %>% 
+      pivot_longer(.,cols = matches('^(G|D|SC|P_|N).*'), 
+                   names_pattern = "(^[G|D|SC|P_|N].*[A|M|F|G|Lo|t|tive|Unassigned|stgQC_fail|(0-9)])_(alt_sNum|alt_cProp|ref_sNum|ref_cProp|raw|qc|DP|RefN|AltN)", 
+                   names_to = c( "groups" ,".value")) %>%
+      mutate(filt_reason = case_when(filter != 'PASS' | is.na(filter) ~ 'Absent in Pf7', ##is.na(type) ~ 'Absent in pf7',### !!NB - Marking those missing in the pf7 dataset first. May need to be put last below if we want to include those absent if pf7 as some of these have been seen to be of good quality
+                                     alt_sNum < 8 & ref_sNum < 8 ~  "Low UMI support",
+                                     alt_sNum >= 15 & ref_sNum >= 15 ~  "Non distinct",
+                                     abs(alt_sNum - ref_sNum) < 8 ~ 'Noisy' ,
+                                     raw == '1' & alt_sNum > ref_sNum ~ 'Ref inverted' ,
+                                     raw == '0' & ref_sNum > alt_sNum ~ 'Alt inverted',
+                                     is.na(raw)&alt_sNum!=0&ref_sNum!=0  ~ "No fbayes call",
+                                     str_detect(filter, 'Hyper') ~ 'Hypervariable',
+                                     # is.na(type) ~ 'Absent in pf7',
+                                     T ~ 'Clean'
+                                     # !is.na(qc) ~ "Clean"
+                                     )
+             ) %>%
+    mutate(qc2 = case_when(filt_reason == 'Clean' ~ raw))
+  
+  return(snp_qc_tbl)
+
+  }
+```
+
+```{r}
+ss_afm_pf7M_qc <- map(ss_afm_pf7M_pf7qc, ~snps_qc_filts(m14_gt=.x))
+
+## Make snp_qc directory for storing qc files
+imap(ss_afm_pf7M_qc, ~system(paste0('mkdir /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/', str_remove(.y, '\\..*'),'/pbulk_gtypes/',str_remove(.y, 'm.*\\.'),'_k', optimum_k[str_remove(.y, '\\..*')],'_', algn_nm,'/p1/snp_qc')))
+
+imap(ss_afm_pf7M_qc, ~write_csv(.x, paste0('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/', str_remove(.y, '\\..*'),'/pbulk_gtypes/',str_remove(.y, 'm.*\\.'),'_k', optimum_k[str_remove(.y, '\\..*')],'_', algn_nm,'/p1/snp_qc/ss_afm_pf7M_qc.csv')))
+
+
+```
+
+
+```{r}
+# ss_ag_k6r_pf7M_qc <- snps_qc_filts(m14_gt=ss_ag_k6r_pf7M_pf7qc)
+# 
+# ss_ag_k6r_pf7M_qc %>% write_csv(., '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/msc48/pbulk_gtypes/stage_ag_strain_qcd_k8_minimp/p1/snp_qc/ss_ag_k6r_pf7M_qc.csv')
+
+```
+
+```{r}
+# s_k6r_pf7M_qc <- snps_qc_filts(m14_gt=s_k6r_pf7M_pf7qc)
+# 
+# s_k6r_pf7M_qc %>% write_csv(., '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/msc48/pbulk_gtypes/strain_qcd_k8_minimp/p1/snp_qc/s_k6r_pf7M_qc.csv')
+
+```
+
+Minimal QC (lessQC [lqc]) retaining the "Noisy", "Non distinct", 'Ref inverted' and 'Alt inverted' categories
+```{r}
+##!!!! NOTE :Same script as above just commenting out the lines to remove "Noisy", "Non distinct", 'Ref inverted' and 'Alt inverted' categories - Need to find a clever way to do this to avoid repetition
+##!!!! NOTE :Adding S to [G|D] [G|D|S] so as to detect the SC labels in the k6 raw
+##!!!! NOTE :Using instead of gt_fb_vtx_p1_bi_qc_pf7 since we want to only look at SNPs in pf 7 Mali
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+# snp_qc_tbl <- gt_fb_vtx_p1_bi_qc_pf7 %>% rename_with( ~str_replace(., '$','_raw'), matches("^[G|D|S].*_[A-Z]$")) %>% dplyr::select(chrom, pos,
+
+snps_qc_filts_lqc <- function(m14_gt){
+    
+    snp_qc_tbl <- m14_gt %>% filter(filt_reason1 == 'Pass') %>% rename_with( ~str_replace(., '$','_raw'), matches("^(G|D|SC|P_|N).*(_A|_F|_M|_G|_Lo|_G|blet|tive|Unassigned|fail|[0-9])$")) %>% dplyr::select(chrom, pos, matches('.*_raw$|.*_qc$|.*_sNum$|.*_cProp$|.*_DP$|.*_RefN$|.*_AltN$'), type, filter,VQSLOD,CDS,AC,AN,AF, alleles)   %>% 
+        pivot_longer(.,cols = matches('^(G|D|SC|P_|N).*'), 
+                     # names_pattern = "(^[G|D|S].*[A|M|F|blet])_([alt|ref|raw|qc|DP|RefN|AltN].*)",
+                     # names_pattern = "(^[G|D|S].*[A|M|F|t])_(alt_sNum|alt_cProp|ref_sNum|ref_cProp|raw|qc|DP|RefN|AltN)", 
+                     names_pattern = "(^[G|D|SC|P_|N].*[A|M|F|G|Lo|t|tive|Unassigned|stgQC_fail|(0-9)])_(alt_sNum|alt_cProp|ref_sNum|ref_cProp|raw|qc|DP|RefN|AltN)", 
+                     names_to = c( "groups" ,".value")) %>%
+        mutate(filt_reason = case_when(filter != 'PASS' | is.na(filter) ~ 'Absent in Pf7', ##is.na(type) ~ 'Absent in pf7',### !!NB - Marking those missing in the pf7 dataset first. May need to be put last below if we want to include those absent if pf7 as some of these have been seen to be of good quality
+                                       # alt_sNum < 5 & ref_sNum < 5 ~  "Low UMI support",
+                                       # alt_sNum >= 15 & ref_sNum >= 15 ~  "Non distinct",
+                                       # abs(alt_sNum - ref_sNum) < 8 ~ 'Noisy' ,
+                                       # raw == '1' & alt_sNum > ref_sNum ~ 'Ref inverted' ,
+                                       # raw == '0' & ref_sNum > alt_sNum ~ 'Alt inverted',
+                                       # is.na(raw)&alt_sNum!=0&ref_sNum!=0  ~ "No fbayes call",
+                                       # str_detect(filter, 'Hyper') ~ 'Hypervariable',
+                                       # is.na(type) ~ 'Absent in pf7',
+                                       T ~ 'Clean'
+                                       # !is.na(qc) ~ "Clean"
+        )
+        ) %>%
+        mutate(qc2 = case_when(filt_reason == 'Clean' ~ raw))
+    
+    return(snp_qc_tbl)
+    
+}
+```
+
+
+```{r}
+# s_lqc_k6r_pf7M_qc <- snps_qc_filts_lqc(m14_gt=s_k6r_pf7M_pf7qc)
+ss_afm_pf7M_lqc <- map(ss_afm_pf7M_pf7qc, ~snps_qc_filts_lqc(m14_gt = .x))
+# 
+# s_lqc_k6r_pf7M_qc %>% write_csv(., '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/',trip,'/data/processed/msc48/pbulk_gtypes/strain_qcd_k8_minimp/p1/snp_qc/s_lqc_k6r_pf7M_qc.csv')
+
+```
+
+```{r}
+# ss_afm_pf7M_qc <- map(ss_afm_pf7M_pf7qc, ~snps_qc_filts(m14_gt=.x))
+```
+
+```{r, fig.height=4, fig.width=20}
+##Function to plot snps per the number of SNPs falling in the different filter categories for each stage + strain cluster
+plt_snp_filt_categ <- function(annot_snp_qc, xlb = 'Strain'){
+  
+  annot_snp_qc %>% dplyr::count(groups, filt_reason) %>% 
+  ggplot(aes(x=groups,fill=filt_reason, y = n)) + 
+  geom_col(position = position_dodge(width = 1)) + 
+  geom_text(aes(label=n, color = filt_reason), vjust = 0.5, hjust = -0.1, position = position_dodge(width = 1), size = 5, label.padding = unit(0.1, "lines"), angle = 90, show.legend = F) + 
+  scale_y_continuous(expand = expansion(mult =c(0, 0.25))) + 
+  labs(x = xlb, y = 'Number of SNPs', fill = 'SNP category') +
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 16, angle = 90),
+        axis.title = element_text(size = 18, face = 'bold'),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 18, face = 'bold')) 
+  
+}
+
+
+```
+
+
+```{r, fig.height=4, fig.width=20}
+##Function to plot snps per the number of SNPs falling in the different filter categories for each stage + strain cluster
+map(ss_afm_pf7M_qc, ~plt_snp_filt_categ(annot_snp_qc = .x))
+
+```
+
+
+```{r, fig.height=4, fig.width=20}
+##Function to plot snps per the number of SNPs falling in the different filter categories for each stage + strain cluster
+# plt_snp_filt_categ(annot_snp_qc = ss_ag_k6r_pf7M_qc, xlb = 'Strain stage combinations')
+
+```
+
+
+```{r, fig.height=4, fig.width=20}
+##Function to plot snps per the number of SNPs falling in the different filter categories for each stage + strain cluster
+# plt_snp_filt_categ(annot_snp_qc = s_k6r_pf7M_qc)
+# plt_snp_filt_categ(annot_snp_qc = s_lqc_k6r_pf7M_qc)
+```
+
+Count those absent in pf7
+
+```{r, fig.height=5, fig.width=14}
+##SNPs in pf7
+# ss_ag_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% distinct(pick(chrom,pos)) %>% dim
+# s_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% distinct(pick(chrom,pos)) %>% dim
+# 
+# ##SNPs where there's less than 8 UMI
+# ss_ag_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason == 'Low UMI support') %>% distinct(chrom,pos) %>% dim
+# s_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason == 'Low UMI support') %>% distinct(chrom,pos) %>% dim
+# 
+# ##Genotypes where there's less than 8 UMI
+# ss_ag_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason == 'Low UMI support') %>% dim
+# s_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason == 'Low UMI support') %>% dim
+# 
+# ##Counts of genotypes where there's less than 8 UMI across groups (range medium)
+# ss_ag_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason == 'Low UMI support') %>% dplyr::count(groups, filt_reason)
+# s_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason == 'Low UMI support') %>% dplyr::count(groups, filt_reason)
+# 
+# ##Summary of genotypes where there's less than 8 UMI across groups (range medium)
+# ss_ag_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason == 'Low UMI support') %>% dplyr::count(groups, filt_reason) %>% pull(n) %>% summary
+# s_k6r_pf7M_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason == 'Low UMI support') %>% dplyr::count(groups, filt_reason) %>% pull(n) %>% summary
+
+```
+
+```{r, fig.height=4, fig.width=15}
+##Function for cleaner plot of SNPs falling in the different filter categories for each stage +/ strain cluster
+
+snp_qc_lvls <- c('Clean','Low UMI support', 'Non distinct', 'Noisy', 'Ref inverted', 'Alt inverted')
+snp_qc_cols <- c(met.brewer('NewKingdom')[c(2,3,1,4,5)],met.brewer('Navajo')[c(2)])  %>% set_names(snp_qc_lvls)
+
+
+cln_plt_snp_filt_categ <- function(annot_snp_qc, xlb = 'Strain'){
+  
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+annot_snp_qc %>% 
+  # filter(!filt_reason %in% c('Absent in Pf7', 'Low UMI support')) %>% 
+  mutate(across(filt_reason, ~droplevels(factor(., levels = snp_qc_lvls)))) %>%
+  dplyr::count(groups, filt_reason, .drop=F) %>%
+    mutate(n_imp = as.numeric(case_when(filt_reason == 'Low UMI support' ~ NA, T ~ n)))%>%
+  group_by(groups) %>% mutate(perc = round((n_imp/sum(n_imp, na.rm = T))*100, digits = 1)) %>%
+  ggplot(aes(x=filt_reason,fill=filt_reason, y = n/1000)) + 
+  geom_col(position = position_dodge(width = 1)) + 
+  geom_text(aes(label=ifelse(is.na(n_imp), "", paste0(n_imp, "(", perc,")")), color = filt_reason), vjust = 0.5, hjust = -0.1, position = position_dodge(width = 1), size = 6.5, angle = 90, show.legend = F, fontface= 'bold') + 
+  scale_color_manual(values = snp_qc_cols) +
+  scale_fill_manual(values = snp_qc_cols) +
+  scale_y_continuous(expand = expansion(mult =c(0, 0.05))) + 
+  facet_wrap(.~groups, nrow = 1,scales = "free_x", drop = T) +
+  labs(x = xlb, y = 'Number of SNPs (X 1e3)', fill = 'SNP category') +
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 14),
+        axis.title.x = element_blank(),
+        strip.text.x.top = element_text(size = 15, face='bold'),
+        axis.text.x = element_blank(),
+        axis.title = element_text(size = 18, face = 'bold'),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 18, face = 'bold'),
+        legend.position="bottom",
+        panel.border=element_rect(colour="grey",fill='transparent'),#,
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+      ) +
+    # coord_fixed()+
+    # coord_flip() +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+}
+```
+
+```{r, fig.height=6, fig.width=24}
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+##!!!CHEATING - SORT OUT
+ss_afm_k6r_qc_plt <- map(ss_afm_pf7M_qc, ~cln_plt_snp_filt_categ(annot_snp_qc = .x))
+ss_afm_k6r_qc_plt
+
+```
+
+
+```{r, fig.height=6, fig.width=24}
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+##!!!CHEATING - SORT OUT
+ss_afm_k6r_lqc_plt <- map(ss_afm_pf7M_lqc, ~cln_plt_snp_filt_categ(annot_snp_qc = .x))
+ss_afm_k6r_lqc_plt
+
+```
+
+
+```{r, fig.width= 12, fig.height=15.4}
+##Put together the plots for annotation
+sag_bqc <- ss_afm_broadqc_plt[str_detect(names(ss_afm_broadqc_plt), "\\.stage_ag_strain_qcd")]
+s_bqc <- ss_afm_broadqc_plt[str_detect(names(ss_afm_broadqc_plt), "\\.strain_qcd")]
+sag_nqc <- ss_afm_k6r_qc_plt[str_detect(names(ss_afm_k6r_qc_plt), "\\.stage_ag_strain_qcd")]
+s_nqc <- ss_afm_k6r_qc_plt[str_detect(names(ss_afm_k6r_qc_plt), "\\.strain_qcd")]
+
+
+pmap(list(sag_bqc, s_bqc, sag_nqc, s_nqc), ~{
+        plot_grid(plot_grid(..1 +
+            theme(plot.margin = margin(t=1.1, b=0.3, l=0.1,r=0.3, unit = "cm")),
+                    ..2 +
+            theme(plot.margin = margin(t=1.1, b=0.3,l=0.1,r=0.3, unit = "cm")), nrow = 1,
+              labels = c('A', 'B'),
+              label_size = 24,
+              vjust= 1) ,
+          ..3 +
+            theme(plot.margin = margin(t=1.1, b=0.3, unit = "cm")),
+          ..4 +
+              theme(plot.margin = margin(t=1.1, b=0.3, unit = "cm")),
+              nrow = 3,
+              labels = c('', 'C', 'D'),
+              label_size = 24,
+              vjust= 1)
+      }
+)
+
+``` 
+
+
+
+```{r, fig.height=5, fig.width=14}
+##Visualize and count the different classes of SNPs removed in QC
+snp_filt_bias_viz <- function(annot_snp_qc, filt_cat){
+  
+  snps_filt_bias <- annot_snp_qc %>% dplyr::distinct(chrom, pos, filt_reason, groups)  %>% filter(filt_reason != 'Absent in Pf7') %>% group_by(chrom,pos) %>% filter(!all(filt_reason == 'Low UMI support')) 
+  
+  snps_filt_bias_fc <- snps_filt_bias %>% filter(any(filt_reason == filt_cat)) %>% group_by(chrom, pos) %>% ungroup() 
+  # snps_filt_bias_fc %>%  pivot_wider(names_from = groups, values_from = filt_reason) %>% View()
+  snps_filt_bias_fc %>%  pivot_wider(names_from = groups, values_from = filt_reason) %>% dim() %>% print()
+  snps_filt_bias_fc %>% filter(filt_reason == filt_cat) %>% dplyr::count(groups) %>% print()
+  snps_filt_bias_fc %>%  dplyr::count(filt_reason, groups) %>% print()
+  snps_filt_bias %>% filter(any(filt_reason == filt_cat)) %>% filter(any(filt_reason == 'Clean'))  %>% group_by(chrom, pos) %>% filter(sum(filt_reason == filt_cat) > 2) %>% ungroup() %>%  pivot_wider(names_from = groups, values_from = filt_reason) %>% dim %>% print()
+
+}
+```
+
+
+```{r, fig.height=5, fig.width=14}
+##Visualize and count the different classes of SNPs removed in QC
+for (fc in c('Non distinct', 'Noisy', 'Alt inverted', 'Ref inverted')){
+  map(ss_afm_pf7M_qc, ~snp_filt_bias_viz(annot_snp_qc = .x, filt_cat = fc))
+}
+```
+
+
+```{r, fig.height=5, fig.width=14}
+##Visualize and count SNPs where some stage strain groups support 'Non distinct' or 'Noisy' and other groups support 'Clean'
+ss_afm_pf7M_qc[["msc14.stage_ag_strain_qcd"]] %>% dplyr::distinct(chrom, pos, filt_reason, groups) %>% filter(filt_reason != 'Absent in Pf7') %>% filter(filt_reason != 'Absent in Pf7') %>% group_by(chrom,pos) %>% filter(!all(filt_reason == 'Low UMI support')) %>% filter(any(filt_reason == 'Non distinct' | filt_reason == 'Noisy')) %>% filter(any(filt_reason == 'Clean'))  %>% group_by(chrom, pos) %>% ungroup %>% dplyr::count(filt_reason, groups) 
+#%>% View
+
+
+```
+
+
+```{r}
+##Viz and Remove doublets and get informative SNPs
+snp_rm_dblt_infomtv <- function(annot_snp_qc){
+  annot_snp_qc %>% filter(str_detect(groups, "Doublet")) %>% distinct(., pick(chrom,pos), .keep_all = T) %>% mutate(id =paste0(chrom,'_',pos)) %>% pull(id) %>% length() %>% print()
+
+  annot_snp_qc_nd <- annot_snp_qc %>% filter(!str_detect(groups, "Doublet"))%>% filter(!is.na(qc2))
+  
+  annot_snp_qc_nd %>% group_by(chrom, pos) %>% filter(n_distinct(qc2) == 1 ) %>% distinct(., pick(chrom,pos), .keep_all = T) %>% dim() %>% print()
+  
+  annot_snp_qc_infomtv <- annot_snp_qc_nd  %>% group_by(chrom, pos) %>% filter(n_distinct(qc2) ==2 ) %>% ungroup
+  
+  annot_snp_qc_infomtv %>% distinct(., pick(chrom,pos), .keep_all = T) %>% dim() %>% print()
+
+
+return(list(annot_snp_qc_nd, annot_snp_qc_infomtv))
+
+}
+```
+
+```{r, fig.height=5, fig.width=14}
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+ss_afm_pf7M_qc_infomtv <- map(ss_afm_pf7M_qc, ~snp_rm_dblt_infomtv(annot_snp_qc = .x))
+# ss_ag_k6r_pf7M_qc_infomtv <- snp_rm_dblt_infomtv(annot_snp_qc = ss_ag_k6r_pf7M_qc) 
+```
+
+```{r, fig.height=5, fig.width=14}
+##By retaining only SNPs with absolute difference between alt and ref >10 we also factor in depth per allele per cluster
+ss_afm_pf7M_lqc_infomtv <- map(ss_afm_pf7M_lqc, ~snp_rm_dblt_infomtv(annot_snp_qc = .x))
+# ss_ag_k6r_pf7M_qc_infomtv <- snp_rm_dblt_infomtv(annot_snp_qc = ss_ag_k6r_pf7M_qc) 
+```
+
+```{r}
+pf_chr_size = read_delim('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/PlasmoDB-52_Pfalciparum3D7_Genome.size', col_names = c('chrom', 'size')) %>% mutate(chr = str_remove_all(chrom,'Pf3D7_0|Pf3D7_|_v3')) 
+```
+
+IBS megacells from Mi
+
+#------------------------ 2. compute IBS for megaCells -----------------------------------------#####
+
+#------------------------------------ #
+# Compute ibs for pseudo 'mega' cells #
+#------------------------------------ #
+
+
+```{r}
+
+gtypes_chr_cln<- function(snp_qc_fnl ){
+  gtypes_chr_pos_pos <- snp_qc_fnl %>% dplyr::select(chrom, pos, groups, qc2, alleles) %>% pivot_wider(names_from = groups, values_from = qc2) %>% unite(., col="id", c(chrom, pos), sep = "_", remove = F) %>% mutate(chr = str_remove_all(chrom, 'Pf3D7_0|Pf3D7_|_v3'))
+}
+```
+
+
+
+```{r}
+
+ss_afm_pf7M_cln_gt<- map(ss_afm_pf7M_qc_infomtv, ~gtypes_chr_cln(snp_qc_fnl = .x[[1]]))
+```
+
+```{r}
+## !!!! NOTE - Remove SC8 in MSC14 as shown to be poor quality
+ss_afm_pf7M_cln_gt[c("msc14.stage_afm_strain_qcd", "msc14.stage_ag_strain_qcd", "msc14.strain_qcd")] <- ss_afm_pf7M_cln_gt[c("msc14.stage_afm_strain_qcd", "msc14.stage_ag_strain_qcd", "msc14.strain_qcd")] %>% map(., ~dplyr::select(.x, -c(contains("SC8")))) 
+```
+
+
+```{r}
+ss_afm_pf7M_cln_gt_lqc <- map(ss_afm_pf7M_lqc_infomtv, ~gtypes_chr_cln(snp_qc_fnl = .x[[1]]))
+```
+
+
+```{r}
+## !!!! NOTE - Remove SC8 in MSC14 as shown to be poor quality
+ss_afm_pf7M_cln_gt_lqc[c("msc14.stage_afm_strain_qcd", "msc14.stage_ag_strain_qcd", "msc14.strain_qcd")] <- ss_afm_pf7M_cln_gt_lqc[c("msc14.stage_afm_strain_qcd", "msc14.stage_ag_strain_qcd", "msc14.strain_qcd")] %>% map(., ~dplyr::select(.x, -c(contains("SC8")))) 
+```
+
+
+```{r}
+
+##Function to save tables in excel as sheets
+
+createWorksheet <- function(x, y){
+  wb <- createWorkbook()
+  for(i in seq_along(x)){
+    addWorksheet(wb, names(x)[i])
+    writeData(wb, sheet = names(x)[i], x[[i]])
+    saveWorkbook(wb, file = y, overwrite = TRUE)
+  }
+}
+
+```
+
+
+
+Export the SNPs with QC metrics and only clean SNPs for stage&strain combinations and just strain
+```{r, eval=T}
+##!!!! NOTE - MANUSCRIPT SNPS table
+
+## subset SNP tables to write and rename lists/sheets 
+### QC
+snps_export_qc <- ss_afm_pf7M_qc[str_detect(names(ss_afm_pf7M_qc), "stage_ag|\\.strain_qcd")] %>% map(., ~rename_with(., ~paste0('Pf7_',.), c("filter","type","VQSLOD","CDS","AC","AN","AF")))
+names(snps_export_qc) <- paste0(10:(length(snps_export_qc)+9), ".", str_replace_all(names(snps_export_qc), c("\\.stage_ag_strain_qcd" = " stage_strain QC", "\\.strain_qcd" = " strain QC", "msc" = "MSC")))
+
+### Clean
+snps_export_cln <- ss_afm_pf7M_cln_gt[str_detect(names(ss_afm_pf7M_cln_gt), "stage_ag|\\.strain_qcd")]  %>% map(., ~dplyr::select(.x, -c(chr))) 
+names(snps_export_cln) <- paste0(2:(length(snps_export_cln)+1), ".", str_replace_all(names(snps_export_cln), c("\\.stage_ag_strain_qcd" = " stage_strain clean", "\\.strain_qcd" = " strain clean", "msc" = "MSC")))
+
+createWorksheet(c(snps_export_cln, snps_export_qc), paste0("../",trip,"/v3_science_manuscript/tables/data S9 - Strain & stage-strain SNPs including QC categories.xlsx"))
+```
+
+```{r, fig.height=3.8, fig.width=4.2}
+##Heatmap function
+
+gtypes_chr_cln_ibs_hm <- function(gtypes_chr_pos){
+  
+  # ##Remove SC8 and SC1_F
+  # gtypes_chr_pos <- snp_qc_tbl %>% filter(!(groups %in% c("SC8_F", "SC1_F")))%>% dplyr::select(chrom, pos, groups, qc2, alleles) %>% pivot_wider(names_from = groups, values_from = qc2) %>% unite(., col="id", c(chrom, pos), sep = "_", remove = F) %>% mutate(chr = str_remove_all(chrom, 'Pf3D7_0|Pf3D7_|_v3'))
+  
+  gtMat = gtypes_chr_pos %>% dplyr::select(-c(alleles,chrom, pos, chr))  %>% column_to_rownames("id") %>% mutate(across(everything(), ~as.numeric(str_replace(., '1', '2'))))%>% as.matrix() 
+  
+  
+  gdsFile = tempfile()
+    
+  snpgdsCreateGeno(gdsFile, genmat = gtMat, sample.id = colnames(gtMat), 
+                     snp.id = rownames(gtMat), snp.chromosome = gtypes_chr_pos$chr, 
+                     snp.position = gtypes_chr_pos$pos, snp.allele = as.character(gtypes_chr_pos$alleles), snpfirstdim = TRUE)  
+  
+  gds = snpgdsOpen(gdsFile)
+  
+  gdsSub = snpgdsLDpruning(gds, ld.threshold = 0.2)
+  
+  ibs = snpgdsIBS(gds, num.thread = 4)
+  
+  rownames(ibs$ibs) = colnames(ibs$ibs) = colnames(gtMat)
+    
+    
+  colFun = suppressWarnings(brewer.pal(100, 'Greens'))
+  colFun = circlize::colorRamp2(seq(0.5, 1, length.out = length(colFun)), 
+                                  colFun)
+  # celltype_col = brewer.pal(8,'Dark2')[as.numeric(as.factor(sapply(strsplit(colnames(ibs$ibs),split=':'),'[',3)))]
+  # names(celltype_col) = as.factor(sapply(strsplit(colnames(ibs$ibs),split=':'),'[',3))
+  
+  # hm = Heatmap(ibs$ibs, col = colFun, show_row_names = TRUE, 
+  #                show_column_names = TRUE, show_row_dend = T, 
+  #                show_column_dend = T, row_title_rot = 0, cluster_rows = F, cluster_columns = F)
+  
+  # colnames(a) <- stg_strn_ordr %>% str_replace_all(.,  c('G'='SC', '1_i'='1','1_o'='2', '2_i_A'='3_A', '2_i_M' = '4_M', '2_i_F' = '4_F', '2_o'='5','3_i'='6','3_o'='7') )
+  # rownames(a) <- stg_strn_ordr %>% str_replace_all(.,  c('G'='SC', '1_i'='1','1_o'='2', '2_i_A'='3_A', '2_i_M' = '4_M', '2_i_F' = '4_F', '2_o'='5','3_i'='6','3_o'='7') )
+    
+  hm = Heatmap(ibs$ibs, name='IBS', col = colFun, show_row_names = TRUE, 
+                 show_column_names = TRUE, show_row_dend = T, 
+                 show_column_dend = T, row_title_rot = 0, cluster_rows = T, cluster_columns = T)
+  
+  mat<-ibs$ibs
+
+  hm2<-Heatmap(mat, name='IBS', col = colFun, show_row_names = TRUE, 
+                 show_column_names = TRUE, show_row_dend = T, 
+                 show_column_dend = T, row_title_rot = 0, cluster_rows = T, cluster_columns = T, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), border='black',   heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),
+                  layer_fun = function(j, i, x, y, width, height, fill) {
+                      v = pindex(mat, i, j)
+                      l = v >0.98
+                      grid.rect(x[l], y[l], width = width, height = height, gp = gpar(col = "#a4c2f4", lwd = 2, fill = "transparent"))
+})
+  ##Make rectangle heatmap https://jokergoo.github.io/2021/07/22/make-triangle-heatmap/
+  
+  od =  hclust(dist(mat))$order
+  hm2_od = mat[od, od]
+  
+  hm3<- Heatmap(hm2_od, rect_gp = gpar(type = "none"), name='IBS', col = colFun, show_row_names = TRUE, row_names_side = c("right"),
+                 # show_column_names = TRUE, 
+                show_row_dend = T, 
+                 show_column_dend = F, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), 
+              heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),
+              border='black',
+              cell_fun = function(j, i, x, y, w, h, fill) {
+        if(as.numeric(x) <= 1 - as.numeric(y) + 1e-6) {
+            grid.rect(x, y, w, h, gp = gpar(fill = fill, col = fill))
+        }
+    })
+  
+  print(hm)
+  print(hm2)
+  print(hm3)
+}
+```
+
+```{r, fig.height=3.8, fig.width=4.2}
+##Heatmap function
+
+gtypes_chr_cln_ibs_mtx <- function(gtypes_chr_pos){
+  
+  # ##Remove SC8 and SC1_F
+  # gtypes_chr_pos <- snp_qc_tbl %>% filter(!(groups %in% c("SC8_F", "SC1_F")))%>% dplyr::select(chrom, pos, groups, qc2, alleles) %>% pivot_wider(names_from = groups, values_from = qc2) %>% unite(., col="id", c(chrom, pos), sep = "_", remove = F) %>% mutate(chr = str_remove_all(chrom, 'Pf3D7_0|Pf3D7_|_v3'))
+  
+  gtMat = gtypes_chr_pos %>% dplyr::select(-c(alleles,chrom, pos, chr))  %>% column_to_rownames("id") %>% mutate(across(everything(), ~as.numeric(str_replace(., '1', '2'))))%>% as.matrix() 
+  gtMat = gtMat[,sort(colnames(gtMat))]
+  
+  
+  gdsFile = tempfile()
+    
+  snpgdsCreateGeno(gdsFile, genmat = gtMat, sample.id = colnames(gtMat), 
+                     snp.id = rownames(gtMat), snp.chromosome = gtypes_chr_pos$chr, 
+                     snp.position = gtypes_chr_pos$pos, snp.allele = as.character(gtypes_chr_pos$alleles), snpfirstdim = TRUE)  
+  
+  gds = snpgdsOpen(gdsFile)
+  
+  gdsSub = snpgdsLDpruning(gds, ld.threshold = 0.2)
+  
+  ibs = snpgdsIBS(gds, num.thread = 4)
+  
+  rownames(ibs$ibs) = colnames(ibs$ibs) = colnames(gtMat)
+    
+  mat<-ibs$ibs
+   
+}
+```
+
+```{r, fig.height=3.8, fig.width=4.2}
+##Heatmap function
+
+gtypes_ibs_heatmap <- function(mtx, dendo = F){
+  
+  colFun = suppressWarnings(brewer.pal(100, 'Greens'))
+  colFun = circlize::colorRamp2(seq(0.5, 1, length.out = length(colFun)), 
+                                  colFun)
+   print(str(mtx))
+   
+  fa = str_extract(colnames(mtx), 'msc.*')
+  print(str(fa))
+  
+  # c_d = cluster_between_groups(mtx, fa)
+  # dendog = if(dendo == T) c_d else F
+  dendog = if(dendo == T) cluster_between_groups(mtx, fa) else F
+  print(str(fa))
+  print(str(dendog))
+  
+  # fa = str_extract(colnames(mtx), 'msc.*')
+  # # fa_col = c("a" = 2, "b" = 3, "c" = 4)
+  # dend1 = cluster_between_groups(mtx, fa)
+  
+
+  hm = Heatmap(mtx, name='IBS', col = colFun, show_row_names = TRUE, 
+                 show_column_names = TRUE, show_row_dend = T, 
+                 show_column_dend = T, row_title_rot = 0, cluster_rows = dendog, cluster_columns = dendog)
+  
+  
+  hm2<-Heatmap(mtx, name='IBS', col = colFun, show_row_names = TRUE, 
+                 show_column_names = TRUE, show_row_dend = T, 
+                 show_column_dend = T, row_title_rot = 0, cluster_rows = dendog, cluster_columns = dendog, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), border='black',   heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),
+                  layer_fun = function(j, i, x, y, width, height, fill) {
+                      v = pindex(mtx, i, j)
+                      l = v >0.98
+                      grid.rect(x[l], y[l], width = width, height = height, gp = gpar(col = "#a4c2f4", lwd = 2, fill = "transparent"))
+})
+  
+  print(hm)
+  print(hm2)
+  # print(hm3)
+}
+```
+
+```{r, fig.height=4.1, fig.width=4.5}
+
+ss_afm_ibs_mtx<- map(ss_afm_pf7M_cln_gt, ~gtypes_chr_cln_ibs_mtx(gtypes_chr_pos=.x))
+ss_afm_ibs_hmap<- map(ss_afm_ibs_mtx[1:8], ~gtypes_ibs_heatmap(mtx=.x))
+```
+
+
+```{r, fig.height=4.1, fig.width=4.5}
+## All genotypes done separately since when done together the error for DUPLICATE colnames appears
+ss_cln_gt_tbl_afm <- ss_afm_pf7M_cln_gt[c(seq(1,12,3))] %>%
+    imap(~ rename_with(.x, function(x) paste(.y, x, sep = "_"), -c(id,chrom, pos, alleles, chr))) %>%
+    purrr::reduce(left_join, by = c('id','chrom', 'pos', 'alleles', 'chr')) %>% 
+  rename_with(~str_remove(., '\\.st.*ain'), starts_with(c("msc")) )
+
+ss_cln_gt_tbl_afm<-ss_cln_gt_tbl_afm[,sort(colnames(ss_cln_gt_tbl_afm))]
+
+ss_cln_gt_tbl_ag <- ss_afm_pf7M_cln_gt[c(seq(2,12,3))] %>%
+    imap(~ rename_with(.x, function(x) paste(.y, x, sep = "_"), -c(id,chrom, pos, alleles, chr))) %>%
+    purrr::reduce(left_join, by = c('id','chrom', 'pos', 'alleles', 'chr')) %>% 
+  rename_with(~str_remove(., '\\.st.*ain'), starts_with(c("msc")) )
+
+ss_cln_gt_tbl_ag<-ss_cln_gt_tbl_ag[,sort(colnames(ss_cln_gt_tbl_ag))]
+
+ss_cln_gt_tbl_s <- ss_afm_pf7M_cln_gt[c(seq(3,12,3))] %>%
+    imap(~ rename_with(.x, function(x) paste(.y, x, sep = "_"), -c(id,chrom, pos, alleles, chr))) %>%
+    purrr::reduce(left_join, by = c('id','chrom', 'pos', 'alleles', 'chr')) %>% 
+  rename_with(~str_remove(., '\\.st.*ain'), starts_with(c("msc")) )
+
+ss_cln_gt_tbl_s<-ss_cln_gt_tbl_s[,sort(colnames(ss_cln_gt_tbl_s))]
+
+## 
+ss_cln_all_mtx <- list(ss_cln_gt_tbl_afm, ss_cln_gt_tbl_ag, ss_cln_gt_tbl_s) %>% set_names(c("all.stage_afm_strain_qcd", "all.stage_afm_strain_qcd", "all.strain_qcd"))
+```
+
+
+```{r, fig.height=4.1, fig.width=4.5}
+## gtype for clusters with more than 100
+# strn_c_new_mdata <- readRDS("data/processed/DB52e_star/strn_c_new_mdata_m21.RDS")
+# # strn_c_new_mdata <- readRDS("data/processed/DB52e_star/strn_c_new_mdata_m21.RDS")
+# 
+# clstr_200 <- map(strn_c_new_mdata, . %>% 
+#       filter(cluster_ag_n >= 15) %>%
+#       dplyr::count(Strain_qc, stage_ag) %>% 
+#       filter(stage_ag == 'Gametocyte') %>%
+#       filter(Strain_qc != 'PoorQC') %>%
+#       unite(col = 'cluster',Strain_qc, stage_ag, sep = '_') %>%
+#       pull(cluster) %>%
+#       str_remove_all(., 'ametocyte|sexual')
+# ) %>% imap(., ~paste(.x, .y, sep='_')) %>% unlist() %>% as.vector()
+# 
+# clstr_200_no55 <- map(strn_c_new_mdata, . %>% 
+#       filter(cluster_ag_n >= 15) %>%
+#       dplyr::count(Strain_qc, stage_ag) %>% 
+#       filter(stage_ag == 'Gametocyte') %>%
+#       filter(Strain_qc != 'PoorQC') %>%
+#       unite(col = 'cluster',Strain_qc, stage_ag, sep = '_') %>%
+#       pull(cluster) %>%
+#       str_remove_all(., 'ametocyte|sexual')
+# ) %>% .[names(.) != 'msc55'] %>% imap(., ~paste(.x, .y, sep='_')) %>% unlist() %>% as.vector()
+# 
+# ss_cln_gt_tbl_100 <- ss_cln_gt_tbl[c("id","chrom" ,"pos","alleles","chr",clstr_200_no55)]
+
+```
+
+```{r}
+## Read in msc annotations 
+
+msc_qcd_anotd_stgstrqc <- readRDS('../Mali/data/processed/DB52e_star/msc_qcd_anotd.RDS')
+```
+
+```{r}
+##Clusters with more than 100
+
+# clustr_numbers <- map(strn_c_new_mdata, . %>% 
+#         filter(cluster_ag_n >= 20) %>%
+#         dplyr::count(Strain_qc, stage_ag) %>%  
+#       filter(stage_ag == 'Gametocyte') %>%
+#         mutate(across(stage_ag, ~str_remove_all(., 'ametocyte|sexual'))) %>%
+#         filter(Strain_qc != 'PoorQC') %>%
+#         unite(col = 'cluster',Strain_qc, stage_ag, sep = '_'))%>% 
+#     .[names(.) != 'msc55'] %>%
+#     bind_rows(., .id='sample') %>%
+#     unite(col = 'sample_cluster',cluster, sample, sep = '_')
+
+clustr_numbers <- map(msc_qcd_anotd_stgstrqc, ~.x@meta.data %>% 
+        filter(strain_ag_n >= 20) %>%
+        dplyr::count(strain_qcd, stage_ag) %>%  
+      filter(stage_ag == 'Gametocyte') %>%
+        mutate(across(stage_ag, ~str_remove_all(., 'ametocyte|sexual'))) %>%
+        filter(strain_qcd != 'PoorQC') %>%
+        unite(col = 'cluster',strain_qcd, stage_ag, sep = '_'))%>% 
+    # .[names(.) != 'msc55'] %>%
+    bind_rows(., .id='sample') %>%
+    unite(col = 'sample_cluster',cluster, sample, sep = '_')
+
+```
+
+```{r}
+## Read in msc annotations 
+# clustr_numbers_plusm14 <- msc_qcd_anotd_stgstrqc@meta.data %>% dplyr::count(stage_ag, strain_qcd) %>% filter(stage_ag == "Gametocyte" & !is.na(strain_qcd)) %>% mutate('sample_cluster'= paste(strain_qcd, str_remove(stage_ag, "ametocyte"), "msc14", sep = '_')) %>% select(sample_cluster, n) %>% bind_rows(., clustr_numbers)
+```
+
+
+
+```{r, fig.height=15, fig.width=20}
+
+# gt_all_ibs_mtx<- gtypes_chr_cln_ibs_mtx(gtypes_chr_pos=ss_cln_gt_tbl)
+# gt_all_ibs_hmap<- gtypes_ibs_heatmap(mtx=gt_all_ibs_mtx)
+
+gt_all_ibs_mtx<- map(ss_cln_all_mtx, ~gtypes_chr_cln_ibs_mtx(gtypes_chr_pos=.x))
+gt_all_ibs_hmap<- map(gt_all_ibs_mtx, ~gtypes_ibs_heatmap(mtx=.x))
+
+
+# gt_all_ibs_100_mtx<- gtypes_chr_cln_ibs_mtx(gtypes_chr_pos=ss_cln_gt_tbl_100)
+# gt_all_ibs_100_hmap<- gtypes_ibs_heatmap(mtx=gt_all_ibs_100_mtx, dendo = T)
+
+```
+
+
+```{r}
+## Read in msc annotations 
+clustr_numbers_afm <- map(msc_qcd_anotd_stgstrqc[1:4], ~.x@meta.data %>% 
+        filter(strain_ag_n >= 30 & !is.na(strain_qcd)) %>%
+        distinct(strain_qcd,stage_afm,strain_afm_n) %>% 
+        mutate(across(stage_afm, ~str_remove_all(., 'emale|ale|sexual|ametocyte'))) %>%
+        unite(col = 'cluster', strain_qcd, stage_afm, sep = '_'))  %>% 
+    bind_rows(., .id='sample') %>%
+  mutate(across(sample, ~str_remove_all(., 'sc'))) %>%
+    unite(col = 'sample_cluster', sample, cluster, sep = '_')%>%
+  mutate(across(sample_cluster, ~str_replace(., "MSC", "m")))
+
+rownames(clustr_numbers_afm) <- NULL
+
+clustr_numbers_ag <- map(msc_qcd_anotd_stgstrqc[1:4], ~.x@meta.data %>% 
+        filter(strain_ag_n >= 30 & !is.na(strain_qcd)) %>%
+        distinct(strain_qcd,stage_ag,strain_ag_n) %>% 
+        mutate(across(stage_ag, ~str_remove_all(., 'emale|ale|sexual|ametocyte'))) %>%
+        unite(col = 'cluster', strain_qcd, stage_ag, sep = '_'))  %>% 
+    bind_rows(., .id='sample') %>%
+  mutate(across(sample, ~str_remove_all(., 'sc'))) %>%
+    unite(col = 'sample_cluster', sample, cluster, sep = '_')%>%
+  mutate(across(sample_cluster, ~str_replace(., "MSC", "m")))
+
+rownames(clustr_numbers_ag) <- NULL
+
+clustr_numbers_s <- map(msc_qcd_anotd_stgstrqc[1:4], ~.x@meta.data %>% 
+        filter(strain_ag_n >= 30 & !is.na(strain_qcd)) %>%
+          add_count(strain_qcd, name = "strain_n") %>% 
+        distinct(strain_qcd, strain_n) %>% 
+        unite(col = 'cluster', strain_qcd, sep = '_'))  %>% 
+    bind_rows(., .id='sample') %>%
+  mutate(across(sample, ~str_remove_all(., 'sc')))%>% 
+    unite(col = 'sample_cluster', sample, cluster, sep = '_')%>%
+  mutate(across(sample_cluster, ~str_replace(., "MSC", "m")))
+
+## This will replace the above once the donor labels msc are capitalized
+clustr_numbers_s_cap <- map(msc_qcd_anotd_stgstrqc[1:4], ~.x@meta.data %>% 
+        filter(strain_ag_n >= 30 & !is.na(strain_qcd)) %>%
+          add_count(strain_qcd, name = "strain_n") %>% 
+        distinct(strain_qcd, strain_n) %>% 
+        unite(col = 'cluster', strain_qcd, sep = '_'))  %>% 
+    bind_rows(., .id='sample') %>%
+  mutate(across(sample, ~str_remove_all(., 'sc')))%>% 
+    unite(col = 'sample_cluster', sample, cluster, sep = '_')#%>%
+  #mutate(across(sample_cluster, ~str_replace(., "MSC", "m")))
+
+rownames(clustr_numbers_ag) <- NULL
+```
+
+
+
+```{r, fig.height=8, fig.width=10.5}
+##Merge strain numbers to IBD results
+ibs_don_hm <- function(ibsmtx, clustr_numbers, strn_cat, start_no = 0.5, test_nm = "IBS"){
+colFun = suppressWarnings(brewer.pal(100, 'Greens'))
+colFun = circlize::colorRamp2(seq(start_no, 1, length.out = length(colFun)), 
+                                  colFun)
+  
+sibd_pht_mtx <- ibsmtx
+print(colnames(sibd_pht_mtx))
+sibd_pht_mtx <- sibd_pht_mtx[,row.names(sibd_pht_mtx)]
+
+# fa = str_extract(colnames(sibd_pht_mtx), 'ms.*[0-9]')
+fa = str_remove(colnames(sibd_pht_mtx), '_qcd.*')
+c_d = cluster_within_group(sibd_pht_mtx, fa)
+
+# fr = str_extract(rownames(sibd_pht_mtx), 'ms.*[0-9]')
+fr = str_remove(rownames(sibd_pht_mtx), '_qcd.*')
+print(fr)
+c_r = cluster_within_group(sibd_pht_mtx, fr)
+
+# nms = unique(str_extract(colnames(sibd_pht_mtx), 'ms.*[0-9]'))
+nms = unique(str_remove(colnames(sibd_pht_mtx), '_qcd.*'))
+# sample_c_cols <- met.brewer("Thomas")[1:length(nms)] %>% set_names(nms)
+sample_c_cols <- donor_cols_lcase
+
+# sibd_pht_mtx_cln <- sibd_pht_mtx %>% as.data.frame()%>% rownames_to_column('sid') %>% mutate(across(sid, ~str_replace_all(., c('G_msc' = 'm')))) %>% rename_with(~str_replace_all(., c('G_msc' = 'm')), starts_with('SC')) %>% column_to_rownames('sid') %>% as.matrix()
+sibd_pht_mtx_cln <- sibd_pht_mtx %>% as.data.frame()%>% rownames_to_column('sid') %>% mutate(across(sid, ~str_replace_all(., c('msc' = 'm', '_qcd'='')))) %>% rename_with(~str_replace_all(., c('msc' = 'm', '_qcd'='')), starts_with('msc')) %>% 
+  left_join(., clustr_numbers, by = c('sid'='sample_cluster')) %>% mutate(across(sid, ~paste0(., ' [', !!rlang::sym(strn_cat), ']'))) %>% select(-c(!!rlang::sym(strn_cat))) %>%
+  column_to_rownames('sid') %>% as.matrix()
+
+  
+sibd_pht<- Heatmap(sibd_pht_mtx_cln, name=test_nm, 
+                   col = colFun, 
+                   show_row_names = TRUE, 
+                   row_names_side = c("left"), 
+                   show_column_names = TRUE,  
+                   show_row_dend = T,  
+                   show_column_dend = F, 
+                   row_title_rot = 0, 
+                   cluster_rows = c_r, 
+                   clustering_method_rows = "complete",
+                   cluster_columns = c_d, 
+                   column_names_gp = gpar(fontsize = 15), 
+                   row_names_gp = gpar(fontsize = 15), 
+                   heatmap_legend_param = list(title_gp = gpar(fontsize = 15, fontface = "bold"), labels_gp = gpar(fontsize = 15)),
+                   bottom_annotation = HeatmapAnnotation(Donor = fa, 
+                                                         col = list(Donor = sample_c_cols), 
+                                                         annotation_name_gp = gpar(fontsize = 15, fontface = 'bold'), 
+                                                         annotation_legend_param = list(title_gp = gpar(fontsize = 15, fontface = "bold"), labels_gp = gpar(fontsize = 15))),
+                   column_split = length(nms), 
+                   border = TRUE, 
+                   left_annotation=rowAnnotation(Donor = fa, col = list(Donor = sample_c_cols), annotation_name_gp = gpar(fontsize = 15, fontface = 'bold'), show_legend = F), row_split = length(nms), 
+                   column_title = NULL,
+                   column_title_gp = gpar(fontsize = 16), 
+                   row_title = NULL,
+                   row_title_gp = gpar(fontsize = 16)
+              # border='black',row_gap=unit(.015, "npc"), column_gap=unit(.015, "npc"), 
+              ) %>%
+  draw(., merge_legend = TRUE)
+
+sibd_pht
+}
+```
+
+
+```{r, fig.height=8, fig.width=10}
+
+hms<- pmap(list(gt_all_ibs_mtx, list(clustr_numbers_afm, clustr_numbers_ag, clustr_numbers_s), c("strain_afm_n", "strain_ag_n", "strain_n")), ~ibs_don_hm(ibsmtx=..1, clustr_numbers=..2, strn_cat=..3))
+
+```
+
+
+```{r, fig.height=4.5, fig.width=6}
+
+hms<- pmap(list(gt_all_ibs_mtx[3], list(clustr_numbers_s), c("strain_n")), ~ibs_don_hm(ibsmtx=..1, clustr_numbers=..2, strn_cat=..3))
+
+```
+
+
+```{r, fig.height=4.5, fig.width=6}
+## Capitalize the donor labels - will need to sort out later for entire notebook
+cap_gt_all_ibs_mtx <- gt_all_ibs_mtx[[3]] %>% as.data.frame()%>% rownames_to_column('sid') %>% mutate(across(sid, ~str_replace_all(., c('msc' = 'MSC', '_qcd'='')))) %>% rename_with(~str_replace_all(., c('msc' = 'MSC', '_qcd'='')), starts_with('msc')) %>% column_to_rownames('sid') %>% as.matrix()
+
+```
+
+```{r, fig.height=4, fig.width=5}
+##Merge strain numbers to IBD results
+
+colFun = suppressWarnings(brewer.pal(100, 'Greens'))
+colFun = circlize::colorRamp2(seq(0.5, 1, length.out = length(colFun)), 
+                                  colFun)
+  
+sibd_pht_mtx <- cap_gt_all_ibs_mtx
+print(colnames(sibd_pht_mtx))
+sibd_pht_mtx <- sibd_pht_mtx[,row.names(sibd_pht_mtx)]
+
+# fa = str_extract(colnames(sibd_pht_mtx), 'ms.*[0-9]')
+fa = str_remove(colnames(sibd_pht_mtx), '_S.*')
+c_d = cluster_within_group(sibd_pht_mtx, fa)
+
+# fr = str_extract(rownames(sibd_pht_mtx), 'ms.*[0-9]')
+fr = str_remove(rownames(sibd_pht_mtx), '_S.*')
+print(fr)
+c_r = cluster_within_group(sibd_pht_mtx, fr)
+
+# nms = unique(str_extract(colnames(sibd_pht_mtx), 'ms.*[0-9]'))
+nms = unique(str_remove(colnames(sibd_pht_mtx), '_S.*'))
+# sample_c_cols <- met.brewer("Thomas")[1:length(nms)] %>% set_names(nms)
+sample_c_cols <- donor_cols
+
+row_labs <- sibd_pht_mtx %>% as.data.frame()%>% rownames_to_column('sid') %>% mutate(r_labs =str_remove(sid, "MS.*_")) %>% left_join(., clustr_numbers_s_cap, by = c('sid'='sample_cluster')) %>% mutate(across(r_labs, ~paste0(., ' [', !!rlang::sym("strain_n"), ']'))) %>% select(sid, r_labs) %>% deframe
+
+col_labs <- str_remove(colnames(sibd_pht_mtx), "MS.*_") %>% set_names(colnames(sibd_pht_mtx))
+
+  
+sibd_pht<- Heatmap(sibd_pht_mtx, name="IBS", 
+                   col = colFun, 
+                   show_row_names = TRUE, 
+                   row_labels = row_labs,
+                   column_labels = col_labs,
+                   row_names_side = c("left"), 
+                   show_column_names = TRUE,  
+                   show_row_dend = F,  
+                   show_column_dend = F, 
+                   row_title_rot = 0, 
+                   cluster_rows = c_r, 
+                   clustering_method_rows = "complete",
+                   cluster_columns = c_d, 
+                   column_names_gp = gpar(fontsize = 15), 
+                   row_names_gp = gpar(fontsize = 15), 
+                   heatmap_legend_param = list(title_gp = gpar(fontsize = 15, fontface = "bold"), labels_gp = gpar(fontsize = 15)),
+                   bottom_annotation = HeatmapAnnotation(Donor = fa, 
+                                                         col = list(Donor = sample_c_cols), 
+                                                         annotation_name_gp = gpar(fontsize = 15, fontface = 'bold'), 
+                                                         annotation_legend_param = list(title_gp = gpar(fontsize = 15, fontface = "bold"), labels_gp = gpar(fontsize = 15))),
+                   column_split = length(nms), 
+                   border = TRUE, 
+                   left_annotation=rowAnnotation(Donor = fa, col = list(Donor = sample_c_cols), annotation_name_gp = gpar(fontsize = 15, fontface = 'bold'), show_legend = F), row_split = length(nms), 
+                   column_title = NULL,
+                   column_title_gp = gpar(fontsize = 16), 
+                   row_title = NULL,
+                   row_title_gp = gpar(fontsize = 16)
+              # border='black',row_gap=unit(.015, "npc"), column_gap=unit(.015, "npc"), 
+              ) %>%
+  draw(., merge_legend = TRUE)
+
+sibd_pht
+
+```
+
+```{r, fig.width= 12, fig.height=7}
+##save svg for sk21
+save_plot('plots/mali2021_all/fig4/sibd_pht.svg', plot_grid(ggdraw(sibd_pht)), base_width = 4, base_height = 5)
+```
+
+
+```{r, fig.height=8, fig.width=10.5, eval=FALSE}
+# ##Merge strain numbers to IBD results - needs IBD!!!!!
+# colFun = suppressWarnings(brewer.pal(100, 'Greens'))
+# colFun = circlize::colorRamp2(seq(0.5, 1, length.out = length(colFun)), 
+#                                   colFun)
+#   
+# sibd_pht_mtx <- gt_all_ibs_mtx
+# 
+# sibd_pht_mtx <- sibd_pht_mtx[,row.names(sibd_pht_mtx)]
+# 
+# # fa = str_extract(colnames(sibd_pht_mtx), 'ms.*[0-9]')
+# fa = str_remove(colnames(sibd_pht_mtx), '_qcd.*')
+# c_d = cluster_within_group(sibd_pht_mtx, fa)
+# 
+# # fr = str_extract(rownames(sibd_pht_mtx), 'ms.*[0-9]')
+# fr = str_remove(rownames(sibd_pht_mtx), '_qcd.*')
+# print(fr)
+# c_r = cluster_within_group(sibd_pht_mtx, fr)
+# 
+# # nms = unique(str_extract(colnames(sibd_pht_mtx), 'ms.*[0-9]'))
+# nms = unique(str_remove(colnames(sibd_pht_mtx), '_qcd.*'))
+# # sample_c_cols <- met.brewer("Thomas")[1:length(nms)] %>% set_names(nms)
+# sample_c_cols <- donor_cols
+# 
+# # sibd_pht_mtx_cln <- sibd_pht_mtx %>% as.data.frame()%>% rownames_to_column('sid') %>% mutate(across(sid, ~str_replace_all(., c('G_msc' = 'm')))) %>% rename_with(~str_replace_all(., c('G_msc' = 'm')), starts_with('SC')) %>% column_to_rownames('sid') %>% as.matrix()
+# sibd_pht_mtx_cln <- sibd_pht_mtx %>% as.data.frame()%>% rownames_to_column('sid') %>% mutate(across(sid, ~str_replace_all(., c('msc' = 'm', '_qcd'='')))) %>% rename_with(~str_replace_all(., c('msc' = 'm', '_qcd'='')), starts_with('msc')) %>% 
+#   left_join(., clustr_numbers, by = c('sid'='sample_cluster')) %>% mutate(across(sid, ~paste0(., ' [', strain_afm_n, ']'))) %>% select(-c(strain_afm_n)) %>%
+#   column_to_rownames('sid') %>% as.matrix()
+# 
+#   
+# sibd_pht<- Heatmap(sibd_pht_mtx_cln, name='IBS', 
+#                    col = colFun, 
+#                    show_row_names = TRUE, 
+#                    row_names_side = c("left"), 
+#                    show_column_names = TRUE,  
+#                    show_row_dend = T,  
+#                    show_column_dend = F, 
+#                    row_title_rot = 0, 
+#                    cluster_rows = c_r, 
+#                    clustering_method_rows = "complete",
+#                    cluster_columns = c_d, 
+#                    column_names_gp = gpar(fontsize = 15), 
+#                    row_names_gp = gpar(fontsize = 15), 
+#                    heatmap_legend_param = list(title_gp = gpar(fontsize = 15, fontface = "bold"), labels_gp = gpar(fontsize = 15)),
+#                    bottom_annotation = HeatmapAnnotation(Donor = fa, 
+#                                                          col = list(Donor = sample_c_cols), 
+#                                                          annotation_name_gp = gpar(fontsize = 15, fontface = 'bold'), 
+#                                                          annotation_legend_param = list(title_gp = gpar(fontsize = 15, fontface = "bold"), labels_gp = gpar(fontsize = 15))),
+#                    column_split = length(nms), 
+#                    border = TRUE, 
+#                    left_annotation=rowAnnotation(Donor = fa, col = list(Donor = sample_c_cols), annotation_name_gp = gpar(fontsize = 15, fontface = 'bold'), show_legend = F), row_split = length(nms), 
+#                    column_title = NULL,
+#                    column_title_gp = gpar(fontsize = 16), 
+#                    row_title = NULL,
+#                    row_title_gp = gpar(fontsize = 16)
+#               # border='black',row_gap=unit(.015, "npc"), column_gap=unit(.015, "npc"), 
+#               ) %>%
+#   draw(., merge_legend = TRUE)
+# 
+# sibd_pht
+
+# Legend(labels = month.name[1:10], legend_gp = gpar(fill = 1:10), 
+#     title = "foo", nrow = 3)
+```
+
+
+
+Read in MSC14 genotypes
+```{r, fig.height=5, fig.width=6}
+# m14_ss_ag_k8r_pf7M_cln_gt <- read_tsv("/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master/ss_ag_k8r_pf7M_cln_gt.tsv") %>% rename_with(~paste0(., "_msc14"), starts_with("SC"))
+```
+
+
+```{r}
+##!!NOTE - gfv_p1_bi_strn_pf7_c is created somewhere downstream so this is likely to give an error
+
+# ss_cln_gt_tbl_100 %>% dplyr::select(-c(id, chrom, alleles))%>% dplyr::select(chr, pos, any_of(sort(colnames(.)))) %>% filter(!if_all(starts_with('SC'), ~is.na(.))) %>% mutate(across(everything(), ~as.numeric(replace_na(., '-1')))) %>% write_tsv(., paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master/ss_cln_gt_tbl_100_m21.tsv"))
+# 
+# ##merge m14 with other donors
+# ss_cln_gt_100_plus_m14 <-m14_ss_ag_k8r_pf7M_cln_gt %>% mutate(across(-pos, as.character)) %>% mutate(across(starts_with('SC'), ~na_if(.,"-1"))) %>% select(-c(contains("_A_"))) %>% full_join(.,ss_cln_gt_tbl_100, by=c('chr', 'pos')) %>% mutate(id= paste0(chr, "_", pos))
+# 
+# ss_cln_gt_100_plus_m14 %>% dplyr::select(-c(id, chrom, alleles))%>% dplyr::select(chr, pos, any_of(sort(colnames(.)))) %>% filter(!if_all(starts_with('SC'), ~is.na(.))) %>% mutate(across(everything(), ~as.numeric(replace_na(., '-1')))) %>% arrange(chr, pos) %>% write_tsv(., paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master/ss_cln_gt_tbl_100_m21_plus_m14.tsv"))
+
+```
+
+
+```{r}
+##Run IBD 
+wdir<- '/Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/sware/hmmIBD-master'
+
+system(paste0(wdir,'/hmmIBD -i ',wdir,'/ss_cln_gt_tbl_100_m21.tsv -o ',wdir,'/ss_cln_gt_tbl_100_m21 -m 100000'))
+
+```
+
+
+```{r}
+wdir<- '/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master'
+
+ss_cln_gt_tbl_100_hmmibd <- read_delim('/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master/ss_cln_gt_tbl_100_m21.hmm.txt')
+ss_cln_gt_tbl_100_hmmibd_f <- read_delim('/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master/ss_cln_gt_tbl_100_m21.hmm_fract.txt')
+
+ss_cln_gt_tbl_100_plus_m14_hmmibd <- read_delim('/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master/ss_cln_gt_tbl_100_m21_plus_m14.hmm.txt')
+ss_cln_gt_tbl_100_plus_m14_hmmibd_f <- read_delim('/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master/ss_cln_gt_tbl_100_m21_plus_m14.hmm_fract.txt')
+
+
+```
+
+
+
+
+```{r, fig.height=5, fig.width=6}
+colFun = suppressWarnings(brewer.pal(100, 'Blues'))
+colFun = circlize::colorRamp2(seq(0, 1, length.out = length(colFun)), colFun)
+  
+cols_rand <- c("#fb9a99", "#cab2d6", "#b2df8a", "#e31a1c", "#ffff99", "#33a02c", "#ff7f00", "#b15928", "#fdbf6f")
+```
+
+
+
+```{r, fig.height=8, fig.width=10.5, eval=FALSE}
+##Merge strain numbers to IBD results
+# ss_n_ibd_tbl100 = ss_cln_gt_tbl_100_hmmibd_f %>% dplyr::select(sample1, sample2, fract_sites_IBD,N_informative_sites) %>% left_join(., clustr_numbers, by = c('sample1'='sample_cluster')) %>% left_join(., clustr_numbers, by = c('sample2'='sample_cluster'), suffix = c('_1', '_2')) %>% mutate(id1 = paste0(sample1, '\n[', n_1, ']'), id2 = paste0(sample2, '\n[', n_2, ']'))  
+ss_n_ibd_tbl100 = ss_cln_gt_tbl_100_plus_m14_hmmibd_f %>% dplyr::select(sample1, sample2, fract_sites_IBD,N_informative_sites) %>% left_join(., clustr_numbers_plusm14, by = c('sample1'='sample_cluster')) %>% left_join(., clustr_numbers_plusm14, by = c('sample2'='sample_cluster'), suffix = c('_1', '_2')) %>% mutate(id1 = paste0(sample1), id2 = paste0(sample2))  
+
+##Get the IBD and the number of sites for each pairwise comparison to annotate heatmap
+s_ibdf_nsites_anno <- ss_n_ibd_tbl100 %>% rename('id2' = id1,  'id1' = id2) %>% bind_rows(., ss_n_ibd_tbl100) %>% mutate(ibdf_nsites = paste0(round(fract_sites_IBD,2), '\n(',N_informative_sites,')'))%>% dplyr::select(starts_with('id'), ibdf_nsites) %>% pivot_wider(names_from = id2, values_from = ibdf_nsites) %>% arrange(id1) %>% mutate(across(starts_with('SC'), ~replace_na(., '1')))%>% column_to_rownames('id1')
+
+
+##Create mirrored matrix and plot
+sibd_pht_mtx <- ss_n_ibd_tbl100 %>% rename('id2' = id1,  'id1' = id2) %>% bind_rows(., ss_n_ibd_tbl100) %>% dplyr::select(starts_with('id'), fract_sites_IBD) %>%  pivot_wider(names_from = id2, values_from = fract_sites_IBD) %>% arrange(id1) %>% mutate(across(starts_with('SC'), ~replace_na(., 1)))%>% column_to_rownames('id1')  
+  
+
+sibd_pht_mtx <- sibd_pht_mtx[,row.names(sibd_pht_mtx)]
+
+fa = str_extract(colnames(sibd_pht_mtx), 'ms.*[0-9]')
+c_d = cluster_within_group(sibd_pht_mtx, fa)
+
+fr = str_extract(rownames(sibd_pht_mtx), 'ms.*[0-9]')
+print(fr)
+c_r = cluster_within_group(sibd_pht_mtx, fr)
+
+nms = unique(str_extract(colnames(sibd_pht_mtx), 'ms.*[0-9]'))
+# sample_c_cols <- met.brewer("Thomas")[1:length(nms)] %>% set_names(nms)
+sample_c_cols <- cols_rand[1:length(nms)] %>% set_names(nms)
+
+sibd_pht_mtx_cln <- sibd_pht_mtx %>% as.data.frame()%>% rownames_to_column('sid') %>% mutate(across(sid, ~str_replace_all(., c('G_msc' = 'm')))) %>% rename_with(~str_replace_all(., c('G_msc' = 'm')), starts_with('SC')) %>% column_to_rownames('sid') %>% as.matrix()
+
+  
+sibd_pht<- Heatmap(sibd_pht_mtx_cln, name='IBD', 
+                   col = colFun, 
+                   show_row_names = TRUE, 
+                   row_names_side = c("left"), 
+                   show_column_names = TRUE,  
+                   show_row_dend = T,  
+                   show_column_dend = F, 
+                   row_title_rot = 0, 
+                   cluster_rows = c_r, 
+                   cluster_columns = c_d, 
+                   column_names_gp = gpar(fontsize = 15), 
+                   row_names_gp = gpar(fontsize = 15), 
+                   heatmap_legend_param = list(title_gp = gpar(fontsize = 15, fontface = "bold"), labels_gp = gpar(fontsize = 15)),
+                   bottom_annotation = HeatmapAnnotation(Donor = fa, 
+                                                         col = list(Donor = sample_c_cols), 
+                                                         annotation_name_gp = gpar(fontsize = 15, fontface = 'bold'), 
+                                                         annotation_legend_param = list(title_gp = gpar(fontsize = 15, fontface = "bold"), labels_gp = gpar(fontsize = 15))),
+                   column_split = length(nms), 
+                   border = TRUE, 
+                   left_annotation=rowAnnotation(Donor = fa, col = list(Donor = sample_c_cols), annotation_name_gp = gpar(fontsize = 15, fontface = 'bold'), show_legend = F), row_split = length(nms), 
+                   column_title = NULL,
+                   column_title_gp = gpar(fontsize = 16), 
+                   row_title = NULL,
+                   row_title_gp = gpar(fontsize = 16)
+              # border='black',row_gap=unit(.015, "npc"), column_gap=unit(.015, "npc"), 
+              ) %>%
+  draw(., merge_legend = TRUE)
+
+sibd_pht
+
+# 
+# hm1<- Heatmap(sibd_pht_mtx_cln, rect_gp = gpar(type = "none"), name='IBD', col = colFun, show_row_names = TRUE, row_names_side = c("right"),
+#                  # show_column_names = TRUE, 
+#                 show_row_dend = T, cluster_rows = c_r, cluster_columns = c_d,
+#                  show_column_dend = F, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), 
+#               heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),
+#     top_annotation = HeatmapAnnotation(Sample = fa, col = list(Sample = sample_c_cols)),column_split = length(nms), border = TRUE, right_annotation=rowAnnotation(Sample = fa, col = list(Sample = sample_c_cols)), row_split = length(nms),
+#               cell_fun = function(j, i, x, y, w, h, fill) {
+#         if(as.numeric(x) <= 1 - as.numeric(y) + 1e-6) {
+#             grid.rect(x, y, w, h, gp = gpar(fill = fill, col = fill))
+#         }
+#     })
+#   
+# hm1
+
+
+
+# od_a = c_r %>% labels
+# sibd_pht_mtx_t = sibd_pht_mtx[od_a, od_a]
+# 
+# sibd_pht_mtx_t_cln <- sibd_pht_mtx_t %>% as.data.frame()%>% rownames_to_column('sid') %>% mutate(across(sid, ~str_replace_all(., c('G_msc' = 'm')))) %>% rename_with(~str_replace_all(., c('G_msc' = 'm')), starts_with('SC')) %>% column_to_rownames('sid') %>% as.matrix()
+# 
+# nmslab = str_extract(od_a, 'ms.*[0-9]')
+# nms = unique(nmslab)
+# sample_c_cols <- met.brewer("Thomas")[1:length(nms)] %>% set_names(nms)
+#   
+# hm3<- Heatmap(sibd_pht_mtx_t_cln,rect_gp = gpar(type = "none"),  name='IBS', col = colFun, show_row_names = TRUE, row_names_side = c("right"),
+#                  # show_column_names = TRUE, 
+#                 show_row_dend = T, cluster_rows = F, cluster_columns = F,
+#                  show_column_dend = F, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), 
+#               heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),
+#     top_annotation = HeatmapAnnotation(Sample = nmslab, col = list(Sample = sample_c_cols)), border = TRUE, right_annotation=rowAnnotation(Sample = nmslab, col = list(Sample = sample_c_cols)), row_split = factor(nmslab, levels = nms),column_split = factor(nmslab, levels = nms), 
+#               cell_fun = function(j, i, x, y, w, h, fill) {
+#         if(as.numeric(x) <= 1 - as.numeric(y) + 1e-6) {
+#             grid.rect(x, y, w, h, gp = gpar(fill = fill, col = fill))
+#         }
+#     })
+# hm3
+Legend(labels = month.name[1:10], legend_gp = gpar(fill = 1:10), 
+    title = "foo", nrow = 3)
+```
+
+
+```{r, fig.height=5, fig.width=6, eval=FALSE}
+##Merge strain numbers to IBD results
+s_strn_n_ibd_tbl = s_k6r_pf7M_cln_gt_hmmibd_f %>% dplyr::select(sample1, sample2, fract_sites_IBD,N_informative_sites) %>% left_join(., strn_qcd_n, by = c('sample1'='strain_qcd')) %>% left_join(., strn_qcd_n, by = c('sample2'='strain_qcd'), suffix = c('_1', '_2')) %>% mutate(id1 = paste0(sample1, '\n[', n_1, ']'), id2 = paste0(sample2, '\n[', n_2, ']'))  
+
+##Get the IBD and the number of sites for each pairwise comparison to annotate heatmap
+s_combi_ibdf_nsites_anno <- s_strn_n_ibd_tbl %>% 
+  rename('id2' = id1,  'id1' = id2) %>% 
+  bind_rows(., s_lqc_strn_n_ibd_tbl) %>% 
+  mutate(ibdf_nsites = paste0(round(fract_sites_IBD,2), '\n(',N_informative_sites,')'))%>% 
+  dplyr::select(starts_with('id'), ibdf_nsites) %>% 
+  pivot_wider(names_from = id2, values_from = ibdf_nsites) %>% 
+  arrange(id1) %>%
+  mutate(across(starts_with('SC'), ~replace_na(., '1')))%>%
+  column_to_rownames('id1')
+
+
+##Create mirrored matrix and plot
+##!!! TIP - Refer to this if you want more complex arrangements https://github.com/jokergoo/ComplexHeatmap/issues/712 - eg different colours for the different half matrices
+s_combi_ibd_pht <- s_strn_n_ibd_tbl %>% 
+  rename('id2' = id1,  'id1' = id2) %>% 
+  bind_rows(., s_lqc_strn_n_ibd_tbl) %>% 
+  dplyr::select(starts_with('id'), fract_sites_IBD) %>%  
+  pivot_wider(names_from = id2, values_from = fract_sites_IBD) %>% 
+  arrange(id1) %>% 
+  mutate(across(starts_with('SC'), ~replace_na(., 1)))%>%
+  column_to_rownames('id1') %>% 
+  as.matrix()%>%
+  Heatmap(., name='IBD', col = colFun, show_row_names = TRUE, row_names_side = c("left"),
+                 show_column_names = TRUE, show_row_dend = T, 
+                 show_column_dend = T, row_title_rot = 0, cluster_rows = F, cluster_columns = F, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), 
+              heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),border='black',
+              cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", s_combi_ibdf_nsites_anno[i, j]), x, y, gp = gpar(fontsize = 13))
+})
+
+s_combi_ibd_pht
+  
+```
+
+#########€#€######€€€€€€€
+
+```{r}
+# m = matrix(rnorm(120), nc = 12)
+# colnames(m) = 1:12
+# fa = rep(c("a", "b", "c"), times = c(2, 4, 6))
+# # fa_col = c("a" = 2, "b" = 3, "c" = 4)
+# dend1 = cluster_between_groups(m, fa)
+# 
+# Heatmap(m, cluster_columns = dend1, 
+#     row_title = "cluster_between_groups")
+# 
+# m
+# fa
+# fa_col
+```
+
+
+```{r, fig.height=4.1, fig.width=4.5}
+
+ss_afm_hmap_ibs<- map(ss_afm_pf7M_cln_gt, ~gtypes_chr_cln_ibs_hm(gtypes_chr_pos=.x))
+```
+
+```{r, fig.height=4.1, fig.width=4.5}
+## Remove SC8
+ss_afm_pf7M_cln_gt_m14_noSC8 <- ss_afm_pf7M_cln_gt[c("msc14.stage_ag_strain_qcd", "msc14.strain_qcd")] %>% map(~.x %>% select(!contains("SC8")))
+ss_afm_hmap_ibs_m14_noSC8 <- map(ss_afm_pf7M_cln_gt_m14_noSC8, ~gtypes_chr_cln_ibs_hm(gtypes_chr_pos=.x))
+
+ss_afm_hmap_ibs_m14_noSC8
+```
+
+
+###########k8_raw -TO BE DELETED IF k8 RAW NOT PREFERED
+
+
+```{r}
+##Function to creat pairwise comparison groups which are the used for plotting chromosome paints
+strn_pw_comps <- function(gtypes_chr_pos, strn_regex){
+  
+  snp_pf7_afm <- gtypes_chr_pos %>% dplyr::select(id, chr, pos, starts_with(strn_regex)) #%>%  dplyr::select(!matches('^SC[0-9]_.$')) 
+  
+  col_pairs_strn <- snp_pf7_afm %>% dplyr::select(starts_with(strn_regex)) %>% colnames() %>% sort() %>% combn(., 2, simplify = F)
+  
+  strn_afm_comps <- map_dfc(col_pairs_strn, function(pair) {
+    snp_pf7_afm %>%
+      transmute(!!paste0(pair[1], "_vs_", pair[2]) := case_when(!is.na(.data[[pair[1]]]) & !is.na(.data[[pair[2]]]) & .data[[pair[1]]] == .data[[pair[2]]] ~ TRUE, 
+                                                                !is.na(.data[[pair[1]]]) & !is.na(.data[[pair[2]]]) & .data[[pair[1]]] != .data[[pair[2]]] ~ FALSE))
+  })
+  
+  strn_afm_comps <- base::cbind(snp_pf7_afm %>% dplyr::select(chr, pos), 
+                                         strn_afm_comps)  %>%
+    filter(!if_all(starts_with(strn_regex), ~is.na(.)))
+  
+  return(strn_afm_comps)
+}
+```
+
+
+```{r}
+##stage strain pairwise comparison groups
+ss_afm_pf7M_afm_comps <- map(ss_afm_pf7M_cln_gt, ~strn_pw_comps(gtypes_chr_pos = .x, strn_regex = c('SC','N')))
+
+# ss_100_plus_m14_comps<- strn_pw_comps(gtypes_chr_pos = ss_cln_gt_100_plus_m14, strn_regex = c('SC','N'))
+
+```
+
+```{r}
+##Function to create binned windows across genome and compare pairwise strains and generate the plotting details for chromosome painting
+b_strn_c_wndw_fn <- function(strn_c_tbl, wndw = 100000) {
+  strn_c_tbl %>% 
+    group_by(chr) %>% 
+    filter(!is.na(chr)) %>%
+    mutate(pos_range = cut(pos, breaks = c(-Inf,seq(0, max(pos), by = wndw),Inf))) %>% 
+    pivot_longer(., cols = starts_with(c('SC','N')), names_to = 'comps', values_to = 'sim') %>% 
+    dplyr::count(comps, chr, pos_range, sim) %>% 
+    group_by(chr, comps, pos_range) %>% 
+    mutate(overlap_TF = ifelse(any(is.na(sim)), sum(!is.na(sim)), n_distinct(sim)))%>%
+    ungroup() %>% 
+    filter(!(is.na(sim) & overlap_TF>0))  %>% 
+    mutate(rltd = case_when(overlap_TF == 0 ~ 'No SNP', overlap_TF == 2 ~ 'Both', overlap_TF==1& sim==TRUE ~ 'Same', overlap_TF==1&sim==FALSE ~ 'Different')) %>% 
+    group_by(chr, comps, pos_range, rltd) %>% 
+    arrange(dplyr::desc(sim), .by_group=T) %>%
+    summarise(overlap_snps_No = paste(n, collapse = ","), 
+              overlap_snps_prop = log10(n[1]/n[2]))  %>% 
+    mutate(across(overlap_snps_No, ~ifelse(rltd == 'No SNP', NA, .))) %>%
+    ungroup()  %>%
+    mutate(normalized_snps_prop = case_when(rltd == "Same" ~ max(overlap_snps_prop, na.rm = TRUE), 
+                                            rltd == "Different" ~ min(overlap_snps_prop, na.rm = TRUE), 
+                                            # rltd == 'No SNP' ~ NA, 
+                                            T ~ overlap_snps_prop)) %>%
+    mutate(start = as.numeric(str_extract(pos_range, "\\d+.*(?=,)")), end = as.numeric(str_extract(pos_range, "(?<=,)\\d+.*(?=])"))) %>% 
+    left_join(.,pf_chr_size, by =c('chr')) %>%
+    mutate(across(chr, ~factor(., levels = c(1:14)))) 
+}
+```
+
+
+```{r}
+##stage strain pairwise comparison chromosome binning of SNPs and creation of windows for plotting
+ss_afm_wndws <- map(ss_afm_pf7M_afm_comps, ~b_strn_c_wndw_fn(strn_c_tbl = .x))
+
+# ss_ag_k6r_wndws <- b_strn_c_wndw_fn(strn_c_tbl = ss_ag_k6r_pf7M_afm_comps)
+# s_k6r_wndws <- b_strn_c_wndw_fn(strn_c_tbl = s_k6r_pf7M_afm_comps)
+# s_lqc_k6r_wndws <- b_strn_c_wndw_fn(strn_c_tbl = s_lqc_k6r_pf7M_comps)
+```
+
+```{r, fig.height=4.1, fig.width=4.5}
+# ss_100_plus_m14_wndws<- b_strn_c_wndw_fn(strn_c_tbl=ss_100_plus_m14_comps)
+
+# ss_ag_hmap_ibs<-gtypes_chr_cln_ibs_hm(gtypes_chr_pos=ss_ag_k6r_pf7M_cln_gt)
+```
+
+```{r}
+## Function for chromosome painting
+
+chrom_paintr_smth_gradient <- function(gtypes_comps_tbl = b_strn, ttl, expn=100000, x_font_sz = 13) {
+
+      # gs <-gtypes_comps_tbl %>% mutate(across(start, ~(./expn)),across(end, ~(./expn)), across(size, ~(./expn))) %>%
+      gs <-gtypes_comps_tbl %>% mutate(across(start, ~(./expn)),across(end, ~(./expn)), across(size, ~(./expn))) %>%
+      ggplot()+
+        geom_segment(
+    aes(x = 0-2000/expn, xend = size+2000/expn, y = chr, yend = chr),
+    linewidth = 9, lineend = "round", colour = "black"
+  ) + 
+      geom_segment(
+    aes(x = 0, xend = size, y = chr, yend = chr),
+    linewidth = 8, lineend = "round", colour = "white"
+  ) +
+  geom_segment(
+    aes(
+      x = start, xend = end,
+      y =  chr, yend =  chr,
+      colour = normalized_snps_prop#,
+      # colour = rltd
+    ),
+    linewidth = 8
+  ) +
+  # scale_color_manual(values = c('Same'='black', 'Different'='#ffd94d', 'Both'='lightgrey', 'No SNP'='white'))+
+  scale_color_gradient2(low="black" , mid = "#F5F5F5", high ="#ffd94d" ,
+                        limits = c(min(gtypes_comps_tbl$normalized_snps_prop, na.rm = TRUE), max(gtypes_comps_tbl$normalized_snps_prop, na.rm = TRUE)),
+                        breaks = seq(min(gtypes_comps_tbl$normalized_snps_prop, na.rm = TRUE), max(gtypes_comps_tbl$normalized_snps_prop, na.rm = TRUE), length.out = 30),
+                        oob = scales::squish,
+                        na.value = "white",
+                        midpoint = 0) +
+  # geom_label_repel(aes(label=new_column, x=(start + end)/2, y = comps), size=3,label.padding = unit(0.01, "lines"),alpha = 1,label.size = 0.01, color = alpha('black', .2))+
+  # facet_wrap(comps~., ncol = 5) ++
+      labs(title = ttl) +
+  theme_classic() +
+  theme(strip.text = element_text(size = 12, face = 'bold'),
+        axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(size =  x_font_sz)) 
+    
+    pp <- gtypes_comps_tbl %>% 
+      separate(.,overlap_snps_No, into=(c('same2', 'diff2')), sep=',' ) %>% 
+      pivot_longer(cols = c('same2','diff2'), names_to = 'shared2', values_to = 'shared_n') %>% 
+      filter(!is.na(shared_n)) %>%
+      mutate('Shared' = case_when(rltd == 'Both' & shared2 == 'same2' ~ 'Same', 
+                                  rltd == 'Both' & shared2 == 'diff2' ~ 'Different', 
+                                  rltd == 'Different' & shared2 == 'same2' ~ 'Different', 
+                                  T ~ rltd)) %>%
+      mutate(across(shared_n, as.numeric)) %>%
+      group_by(Shared) %>% 
+      summarise('snpsNo' = sum(shared_n))%>%
+      arrange(dplyr::desc(snpsNo), .by_group = T) %>%
+    ggplot(., aes(x="", y=snpsNo, fill=Shared))+
+    geom_bar(width = 1, stat = "identity") + 
+    coord_polar("y", start=0)+
+    geom_text(aes(y = snpsNo/2 + c(0, cumsum(snpsNo)[-length(snpsNo)]), 
+                  label = snpsNo), size=5) +
+    theme_void()
+
+    ggdraw(gs + theme_half_open(12)) +
+      draw_plot(pp, .5, .11, .36, .36) 
+}
+
+
+```
+
+
+strains split by stage Without colour gradients
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp_smth <- map(ss_afm_wndws, ~{
+  smp_tbl <- .x
+  smp_tbl %>% split(., ~factor(comps)) %>% imap(.,possibly(~chrom_paintr_smth_gradient(gtypes_comps_tbl =.x, ttl=.y), 'No overlapping SNPs between the 2 groups'))
+})
+
+ss_afm_chromp_smth[1:3]
+```
+
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp_smth[4:6]
+```
+
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp_smth[7:9]
+```
+
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp_smth[10:12]
+```
+
+strains split by stage Without colour gradients
+```{r}
+# strain stage (afm) chromosome painting
+# ss_100_pm14_chromp <- ss_100_plus_m14_wndws %>% split(., ~factor(comps)) %>% imap(.,possibly(~chrom_paintr_smth_gradient(gtypes_comps_tbl =.x, ttl=.y), 'No overlapping SNPs between the 2 groups'))
+# 
+# ss_100_pm14_chromp
+```
+
+
+```{r}
+# strain stage (afm) chromosome painting
+# names(ss_100_pm14_chromp)
+# ss_100_pm14_chromp[["SC1_G_msc60_vs_SC3_G_msc49"]]
+# ss_100_pm14_chromp[["SC1_G_msc48_vs_SC2_G_msc49"]]
+# ss_100_pm14_chromp[["SC2_G_msc49_vs_SC5_G_msc48"]]
+```
+
+
+```{r}
+# strain stage (afm) chromosome painting
+# ss_100_pm14_chromp
+```
+
+strains low QC (lqc) split by stage Without colour gradients
+
+```{r, eval=FALSE}
+# strain stage (afm) chromosome painting
+s_lqc_k6r_chromp <- s_lqc_k6r_wndws %>% split(., ~factor(comps)) %>% imap(.,possibly(~chrom_paintr_smth_gradient(gtypes_comps_tbl =.x, ttl=.y), 'No overlapping SNPs between the 2 groups'))
+
+s_lqc_k6r_chromp
+```
+
+```{r}
+##SC8_F comparison plots
+# ss_afm_chromp[names(ss_afm_chromp)[grep('SC8_F', names(ss_afm_chromp))]]
+```
+
+
+Coalescing genotypically similar groups into coarse asexual and sexual stages
+```{r}
+##Coalescing asexual, male, female groups that appear similar from the IBS heatmap into asexual, gametocytes ## MAY NEED TO REGENOTYE later?  ??Remove SC8_F and SC1_F??
+# ss_ag_k6r_pf7M_cln_gt <- ss_k6r_pf7M_cln_gt %>% mutate(SC1A=SC1_A, SC1G=coalesce(SC1_F, SC1_M), SC2A=SC2_A, SC2G = coalesce(SC2_F, SC2_M), SC3A=SC3_A, SC4G = coalesce(SC4_M, SC4_F),SC5A=SC5_A, SC5G = coalesce(SC5_M, SC5_F), SC6A=SC6_A, SC6G = coalesce(SC6_F, SC6_M),SC7A=SC7_A, SC7G = coalesce(SC7_F, SC7_M), SC8A=SC8_A, SC8F=SC8_F) %>%  dplyr::select(!matches('^SC[0-9]_.$'))
+
+##Same as above but removing the groups already removed with 20 or less parasites
+# ss_ag_k6r_pf7M_cln_gt <- ss_k6r_pf7M_cln_gt %>% mutate(SC1A=SC1_A, SC2A=SC2_A, SC2G = coalesce(SC2_F, SC2_M), SC3A=SC3_A, SC5G = coalesce(SC5_M, SC5_F), SC6A=SC6_A, SC6G = coalesce(SC6_F, SC6_M), SC7G = coalesce(SC7_F, SC7_M)) %>%  dplyr::select(!matches('^SC[0-9]_.$'))
+                                                      
+```
+
+##Simpler chromosome plots(no continous gradient) for SS_AG and S
+
+```{r}
+## Function for chromosome painting
+
+chrom_paintr <- function(gtypes_comps_tbl = b_strn_c, ttl, expn=100000, x_font_sz = 13) {
+
+      gs <-gtypes_comps_tbl %>% mutate(across(start, ~(./expn)),across(end, ~(./expn)), across(size, ~(./expn))) %>%
+      ggplot()+
+      geom_segment(
+    aes(x = 0-(2000/expn), xend = size+(2000/expn), y = chr, yend = chr),
+    linewidth = 3.5, lineend = "round", colour = "black"
+  ) + 
+      geom_segment(
+    aes(x = 0, xend = size, y = chr, yend = chr),
+    linewidth = 2.8, lineend = "round", colour = "white"
+  ) +
+  geom_segment(
+    aes(
+      x = start, xend = end,
+      y =  chr, yend =  chr,
+      colour = rltd
+    ),
+    linewidth = 2.8
+  ) +
+  # scale_color_manual(values = c('Same'= '#D4AF37', 'Different'= '#2C3E50','Both'='lightgrey', 'No SNP'='white'))+      
+  scale_color_manual(values = c('Same'= '#DACB7D', 'Different'= '#2C3E50','Both'='#A9B7C5', 'No SNP'='white'))+ ##prev colours "black" ,"#ffd94d" 
+  # facet_wrap(comps~., ncol = 5) +
+      labs(title = ttl) +
+      labs(colour = "Allele \ncomparison", x = 'Position (bases)', y ="Chromosome") +
+  theme_classic() +
+  theme(#strip.text = element_text(size = 9, face = 'bold'),
+        axis.text.y = element_text(size =  13),
+        axis.text.x = element_text(size =  x_font_sz),
+        # axis.title = element_text(size = 9),
+        axis.title = element_blank(),
+        # legend.title = element_text(size = 9, face = "bold"),
+        # legend.text = element_text(size = 9),
+        title = element_text(size = 12, face = "bold"),
+        legend.position = "none") 
+    
+    pie_bar_tbl <- gtypes_comps_tbl %>% 
+      separate(.,overlap_snps_No, into=(c('same2', 'diff2')), sep=',' ) %>% 
+      pivot_longer(cols = c('same2','diff2'), names_to = 'shared2', values_to = 'shared_n') %>% 
+      filter(!is.na(shared_n)) %>%
+      mutate('Shared' = case_when(rltd == 'Both' & shared2 == 'same2' ~ 'Same', 
+                                  rltd == 'Both' & shared2 == 'diff2' ~ 'Different', 
+                                  rltd == 'Different' & shared2 == 'same2' ~ 'Different', 
+                                  T ~ rltd)) %>%
+      mutate(across(shared_n, as.numeric))
+    
+    pp <- pie_bar_tbl %>% 
+      group_by(Shared) %>% 
+      summarise('snpsNo' = sum(shared_n))%>%
+    arrange(dplyr::desc(snpsNo), .by_group = T) %>%
+    #mutate(lab.ypos = cumsum(prop) - 0.5*prop) %>%
+    ggplot(., aes(x="", y=snpsNo, fill=Shared))+
+    geom_bar(width = 1, stat = "identity") + 
+    coord_polar("y", start=0)+
+    # geom_text(aes(y = snpsNo/2 + c(0, cumsum(snpsNo)[-length(snpsNo)]), 
+    #               label = snpsNo), size=3, colour = "#90c7ff") +
+      geom_label(aes(y = snpsNo/2 + c(0, cumsum(snpsNo)[-length(snpsNo)]), 
+                  label = snpsNo), size=5, label.padding = unit(0.07, "lines"), label.size = 0, color = 'black', fill = 'white') +
+      scale_fill_manual(values = c('Same'= '#DACB7D', 'Different'= '#2C3E50'))+ #'#D4AF37'
+    # labs(title = .y)+
+    theme_void()+
+      theme(legend.position = "none")
+  #theme_minimal_hgrid(11)
+
+    
+    ggdraw(gs ) +
+                draw_plot(pp, x=.5, y=.1, width = .50, height= .50)
+
+  }
+
+```
+
+
+strains split by stage Without colour gradients
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp <- map(ss_afm_wndws, ~{
+  smp_tbl <- .x
+  smp_tbl %>% split(., ~factor(comps)) %>% imap(.,possibly(~chrom_paintr(gtypes_comps_tbl =.x, ttl=.y), 'No overlapping SNPs between the 2 groups'))
+})
+
+```
+
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp[1:3]
+```
+
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp[4:6]
+```
+
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp[7:9]
+```
+
+```{r}
+# strain stage (afm) chromosome painting
+ss_afm_chromp[10:12]
+```
+
+```{r}
+
+plot_grid(plotlist = ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC1_A_vs_SC2_A", "SC1_A_vs_SC2_A", "SC2_A_vs_SC2_G", "SC6_A_vs_SC6_G", "SC6_A_vs_SC7_G", "SC6_G_vs_SC7_G")], ncol = 3)
+# plot_grid(plotlist = plts_strn_ss[c("SC2_A_vs_SC2_G", "SC6_A_vs_SC6_G")], ncol = 2)
+```
+
+
+```{r}
+
+# plot_grid(plotlist = ss_k6r_ag_wndws[c("SC1_A_vs_SC2A", "SC1_A_vs_SC2_G", "SC2_A_vs_SC2_G", "SC6_A_vs_SC6_G", "SC6_A_vs_SC7_G", "SC6_G_vs_SC7_G")], ncol = 3)
+plot_grid(plotlist = ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC2_A_vs_SC2_G", "SC6_A_vs_SC6_G")], ncol = 1)
+```
+
+```{r, fig.height=6, fig.width=12}
+plot_grid(plotlist = ss_afm_chromp[["msc14.strain_qcd"]], ncol = 7)
+```
+
+
+strains split by stage Without colour gradients
+```{r}
+# strain stage (afm) chromosome painting
+s_chromp_xlab_mod <- map(ss_afm_wndws[str_detect(names(ss_afm_wndws), "\\.strain_qcd")], ~{
+  smp_tbl <- .x
+  smp_tbl %>% split(., ~factor(comps)) %>% imap(.,possibly(~chrom_paintr(gtypes_comps_tbl =.x, ttl=.y, x_font_sz = 0), 'No overlapping SNPs between the 2 groups'))
+})
+
+```
+
+
+```{r}
+
+
+b_ovrl <-map(ss_afm_pf7M_afm_comps[str_detect(names(ss_afm_pf7M_afm_comps), "\\.strain_qcd")], ~.x %>% 
+    group_by(chr) %>% 
+    filter(!is.na(chr)) %>%
+    mutate(pos_range = cut(pos, breaks = c(-Inf,seq(0, max(pos), by = 100000),Inf)))  %>% 
+    dplyr::group_by(chr, pos_range) %>%
+    summarise(SNPs_sum = n()) %>%
+    ungroup() %>%
+    left_join(.,pf_chr_size, by =c('chr')) %>%
+    mutate(across(chr, ~factor(., levels = c(1:14)))) %>%
+    mutate(start = as.numeric(str_extract(pos_range, "\\d+.*(?=,)")), end = as.numeric(str_extract(pos_range, "(?<=,)\\d+.*(?=])"))) %>%
+    mutate(across(c(end), ~case_when(is.na(.) ~ size, T ~ .)))
+)
+
+```
+
+
+```{r, fig.width=14, fig.height=6.5}
+
+plt_ovrl <- b_ovrl %>%
+  map(~{ .x %>% ggplot() + 
+      geom_segment(
+    aes(x = 0-2000, xend = size+2000, y = chr, yend = chr),
+    linewidth = 7.5, lineend = "round", colour = "black"
+  ) + 
+      geom_segment(
+    aes(x = 0, xend = size, y = chr, yend = chr),
+    linewidth = 6.5, lineend = "round", colour = "white"
+  ) +
+  geom_segment(
+    aes(
+      x = start, xend = end,
+      y =  chr, yend =  chr
+    ),
+      colour = "#C9E0F1",
+    linewidth = 6.5
+  ) +
+  geom_label(aes(label=SNPs_sum, x=(start + end)/2, y = chr), size=5.4, label.padding = unit(0.05, "lines"), fontface = 'bold', label.size = 0, color = alpha('black', .9))+
+  # facet_wrap(comps~., ncol = 5) +
+      labs(y = 'Chromosome', x = 'Position (bases)') +
+  theme_classic() +
+  theme(strip.text = element_text(size = 12, face = 'bold'),
+        axis.text = element_text(size = 18),
+        axis.title = element_text(size = 20, face = 'bold'),
+        title = element_text(size = 15, face = "bold"))
+})
+
+plt_ovrl
+
+
+```
+
+
+######Moved IBD codes from above to below here - may create complications
+hmmIBD START
+
+```{r}
+##!!NOTE - gfv_p1_bi_strn_pf7_c is created somewhere downstream so this is likely to give an error
+
+system(paste0('mkdir data/processed/ibd/'))
+system(paste0('rm data/processed/ibd/*'))
+
+imap(ss_afm_pf7M_cln_gt[!str_detect(names(ss_afm_pf7M_cln_gt), "\\.stage_afm_strain_qcd")], ~{
+  .x %>% 
+    dplyr::select(-c(id, chrom, alleles))%>% 
+    dplyr::select(chr, pos, any_of(sort(colnames(.)))) %>% 
+    filter(!if_all(starts_with('SC'), ~is.na(.))) %>% 
+    mutate(across(everything(), ~as.numeric(replace_na(., '-1')))) %>% 
+    write_tsv(., paste0("data/processed/ibd/", .y, ".tsv"))
+})
+
+imap(ss_afm_pf7M_cln_gt_lqc[!str_detect(names(ss_afm_pf7M_cln_gt_lqc), "\\.stage_afm_strain_qcd")], ~{
+  .x %>% 
+    dplyr::select(-c(id, chrom, alleles))%>% 
+    dplyr::select(chr, pos, any_of(sort(colnames(.)))) %>% 
+    filter(!if_all(starts_with('SC'), ~is.na(.))) %>% 
+    mutate(across(everything(), ~as.numeric(replace_na(., '-1')))) %>% 
+    write_tsv(., paste0("data/processed/ibd/", .y, "_lqc.tsv"))
+})
+
+## Write out the combined snps across all samples for ibd
+imap(ss_cln_all_mtx[3], ~{
+  .x %>% 
+    dplyr::select(-c(id, chrom, alleles))%>% 
+    dplyr::select(chr, pos, any_of(sort(colnames(.)))) %>% 
+    filter(!if_all(starts_with('msc14_qcd_SC'), ~is.na(.))) %>% 
+    mutate(across(everything(), ~as.numeric(replace_na(., '-1')))) %>% 
+    write_tsv(., paste0("data/processed/ibd/", .y, ".tsv"))
+})
+
+# ##!!!NOTE - Remove SC8 first - use this to include SC8 dplyr::select(chr, pos, paste0('SC', 1:8))
+# s_k6r_pf7M_cln_gt %>% dplyr::select(-c(id, chrom, alleles))%>% dplyr::select(chr, pos, any_of(sort(colnames(.))))  %>% filter(!if_all(starts_with('SC'), ~is.na(.))) %>% mutate(across(everything(), ~as.numeric(replace_na(., '-1')))) %>% write_tsv(., "/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master/s_k6r_pf7M_cln_gt.tsv")
+
+```
+
+
+```{r}
+##Run IBD 
+##!!!!!!NOTE - sort out the output file -o argument - failure to save in the same directory. Goes to working dir
+
+# imap(ss_afm_pf7M_cln_gt, ~system(paste0('hmmIBD -i data/processed/DB52e_star/', str_remove(.y, "\\.st.*"), '/ibd/', .y, '.tsv -o data/processed/DB52e_star/', str_remove(.y, "\\.st.*"), '/ibd/', .y, ' -m 100000')))
+
+imap(ss_afm_pf7M_cln_gt[!str_detect(names(ss_afm_pf7M_cln_gt), "\\.stage_afm_strain_qcd")], ~system(paste0('hmmIBD -i data/processed/ibd/', .y, '.tsv -o data/processed/ibd/', .y, ' -m 100000')))
+imap(ss_afm_pf7M_cln_gt_lqc[!str_detect(names(ss_afm_pf7M_cln_gt_lqc), "\\.stage_afm_strain_qcd")], ~system(paste0('hmmIBD -i data/processed/ibd/', .y, '_lqc.tsv -o data/processed/ibd/', .y, '_lqc -m 100000')))
+
+## IBD of genotypes combined snps across all samples
+imap(ss_cln_all_mtx[3], ~system(paste0('hmmIBD -i data/processed/ibd/', .y, '.tsv -o data/processed/ibd/', .y, ' -m 100000')))
+
+# system('/Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/sware/hmmIBD-master/hmmIBD -i /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/sware/hmmIBD-master/ss_afm_pf7M_cln_gt.tsv -o ss_afm_pf7M_cln_gt -m 100000')
+  
+```
+
+
+```{r}
+# wdir<- '/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master'
+
+ss_afm_pf7M_cln_gt_hmmibd <- map(names(ss_afm_pf7M_cln_gt[!str_detect(names(ss_afm_pf7M_cln_gt), "\\.stage_afm_strain_qcd")]), ~read_delim(paste0('data/processed/ibd/', .x, '.hmm.txt'))) %>% set_names(names(ss_afm_pf7M_cln_gt[!str_detect(names(ss_afm_pf7M_cln_gt), "\\.stage_afm_strain_qcd")]))
+ss_afm_pf7M_cln_gt_hmmibd_f <- map(names(ss_afm_pf7M_cln_gt[!str_detect(names(ss_afm_pf7M_cln_gt), "\\.stage_afm_strain_qcd")]), ~read_delim(paste0('data/processed/ibd/', .x, '.hmm_fract.txt'))) %>% set_names(names(ss_afm_pf7M_cln_gt[!str_detect(names(ss_afm_pf7M_cln_gt), "\\.stage_afm_strain_qcd")]))
+
+ss_afm_pf7M_cln_gt_hmmibd_lqc <- map(names(ss_afm_pf7M_cln_gt_lqc[!str_detect(names(ss_afm_pf7M_cln_gt_lqc), "\\.stage_afm_strain_qcd")]), ~read_delim(paste0('data/processed/ibd/', .x, '_lqc.hmm.txt'))) %>% set_names(names(ss_afm_pf7M_cln_gt_lqc[!str_detect(names(ss_afm_pf7M_cln_gt_lqc), "\\.stage_afm_strain_qcd")]))
+ss_afm_pf7M_cln_gt_hmmibd_f_lqc <- map(names(ss_afm_pf7M_cln_gt_lqc[!str_detect(names(ss_afm_pf7M_cln_gt_lqc), "\\.stage_afm_strain_qcd")]), ~read_delim(paste0('data/processed/ibd/', .x, '_lqc.hmm_fract.txt'))) %>% set_names(names(ss_afm_pf7M_cln_gt_lqc[!str_detect(names(ss_afm_pf7M_cln_gt_lqc), "\\.stage_afm_strain_qcd")]))
+
+## IBD of genotypes combined snps across all samples
+all_donors_hmmibd <- map(names(ss_cln_all_mtx[3]), ~read_delim(paste0('data/processed/ibd/', .x, '.hmm.txt'))) %>% set_names(names(ss_cln_all_mtx[3]))
+all_donors_hmmibd_f <- map(names(ss_cln_all_mtx[3]), ~read_delim(paste0('data/processed/ibd/', .x, '.hmm_fract.txt'))) %>% set_names(names(ss_cln_all_mtx[3]))
+
+
+```
+
+
+```{r}
+# ## Remove SC8 from the msc14 results
+# ss_afm_pf7M_cln_gt_hmmibd_m14 <- ss_afm_pf7M_cln_gt_hmmibd[[8]] %>% filter(sample1 != "SC8" & sample2 != "SC8" )
+# ss_afm_pf7M_cln_gt_hmmibd_f_m14 <- ss_afm_pf7M_cln_gt_hmmibd_f[[8]] %>% filter(sample1 != "SC8" & sample2 != "SC8" )
+# 
+# ss_afm_pf7M_cln_gt_hmmibd_lqc_m14 <- ss_afm_pf7M_cln_gt_hmmibd_lqc[[8]] %>% filter(sample1 != "SC8" & sample2 != "SC8" )
+# ss_afm_pf7M_cln_gt_hmmibd_f_lqc_m14 <- ss_afm_pf7M_cln_gt_hmmibd_f_lqc[[8]] %>% filter(sample1 != "SC8" & sample2 != "SC8" )
+
+```
+
+
+Export the SNPs with QC metrics and only clean SNPs for stage&strain combinations and just strain
+```{r, eval=T}
+##!!!! NOTE -MANUSCRIPT IBD table
+
+## subset IBD tables to write and rename lists/sheets 
+### IBD results
+ibd_export <- ss_afm_pf7M_cln_gt_hmmibd_f[str_detect(names(ss_afm_pf7M_cln_gt_hmmibd_f), "\\.strain_qcd")] %>% map(., ~rename_with(., ~str_replace(.,'sample', 'Strain'), contains("sample")))
+names(ibd_export) <- paste0(2:(length(ibd_export)+1), ".", str_replace_all(names(ibd_export), c("\\.strain_qcd" = " IBD", "msc" = "MSC")))
+
+### IBD summary
+ibd_f_export <- ss_afm_pf7M_cln_gt_hmmibd[str_detect(names(ss_afm_pf7M_cln_gt_hmmibd), "\\.strain_qcd")] %>% map(., ~rename_with(., ~str_replace(.,'sample', 'Strain'), contains("sample")))
+names(ibd_f_export) <- paste0(6:(length(ibd_f_export)+5), ".", str_replace_all(names(ibd_f_export), c("\\.strain_qcd" = " IBD sites summary", "msc" = "MSC")))
+
+
+createWorksheet(c(ibd_export, ibd_f_export), paste0("../",trip,"/v3_science_manuscript/tables/data S10 - Strain pairwise IBD.xlsx"))
+```
+
+
+```{r}
+## Read in msc annotations 
+
+# msc14_qcd_anotd <- readRDS('data/processed/msc14/msc_qcd_anotd.RDS') %>% .[[1]]
+
+```
+
+
+```{r, fig.height=5, fig.width=6}
+colFun = suppressWarnings(brewer.pal(100, 'Blues'))
+colFun = circlize::colorRamp2(seq(0, 1, length.out = length(colFun)), colFun)
+  
+##Strain relatedness counts
+strn_qcd_n <- msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% dplyr::count(strain_qcd) %>% filter(!is.na(strain_qcd))
+
+##Merge strain numbers to IBD results
+s_lqc_strn_n_ibd_tbl = ss_afm_pf7M_cln_gt_hmmibd_f_lqc[["msc14.strain_qcd"]] %>% dplyr::select(sample1, sample2, fract_sites_IBD,N_informative_sites) %>% left_join(., strn_qcd_n, by = c('sample1'='strain_qcd')) %>% left_join(., strn_qcd_n, by = c('sample2'='strain_qcd'), suffix = c('_1', '_2')) %>% mutate(id1 = paste0(sample1, '\n[', n_1, ']'), id2 = paste0(sample2, '\n[', n_2, ']'))
+
+##Get the IBD and the number of sites for each pairwise comparison to annotate heatmap
+s_lqc_ibdf_nsites_anno <- s_lqc_strn_n_ibd_tbl %>% rename('id2' = id1,  'id1' = id2) %>% bind_rows(., s_lqc_strn_n_ibd_tbl)  %>% mutate(ibdf_nsites = paste0(round(fract_sites_IBD,2), '\n(',N_informative_sites,')'))%>% dplyr::select(starts_with('id'), ibdf_nsites) %>% pivot_wider(names_from = id2, values_from = ibdf_nsites) %>% arrange(id1) %>% mutate(across(starts_with('SC'), ~replace_na(., '1')))%>% column_to_rownames('id1')
+
+##Create mirrored matrix and plot
+##!!! TIP - Refer to this if you want more complex arrangements https://github.com/jokergoo/ComplexHeatmap/issues/712 
+s_lqc_sibd_pht_mtx <- s_lqc_strn_n_ibd_tbl %>% rename('id2' = id1,  'id1' = id2) %>% bind_rows(., s_lqc_strn_n_ibd_tbl) %>% dplyr::select(starts_with('id'), fract_sites_IBD) %>%  pivot_wider(names_from = id2, values_from = fract_sites_IBD) %>% arrange(id1) %>% mutate(across(starts_with('SC'), ~replace_na(., 1)))%>% column_to_rownames('id1') %>% as.matrix() 
+  
+s_lqc_ibd_pht<- Heatmap(s_lqc_sibd_pht_mtx, rect_gp = gpar(type = "none"), name='IBD', col = colFun, show_row_names = TRUE, row_names_side = c("left"),
+                 show_column_names = TRUE, show_row_dend = T, 
+                 show_column_dend = T, row_title_rot = 0, cluster_rows = F, cluster_columns = F, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), 
+              heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),
+              # border='black',
+              cell_fun = function(j, i, x, y, width, height, fill) {
+                if(i >= j) { ## diagonal(i==j), lower triangle (i>j), upper triangle (j>i)
+                  grid.rect(x, y, width, height, gp = gpar(fill = fill, col = fill))
+                  grid.text(sprintf("%s", s_lqc_ibdf_nsites_anno[i, j]), x, y, gp = gpar(fontsize = 13))
+        }
+})
+
+
+
+s_lqc_ibd_pht
+
+```
+
+```{r, fig.height=5, fig.width=6}
+##Merge strain numbers to IBD results
+s_strn_n_ibd_tbl = ss_afm_pf7M_cln_gt_hmmibd_f[["msc14.strain_qcd"]] %>% dplyr::select(sample1, sample2, fract_sites_IBD,N_informative_sites) %>% left_join(., strn_qcd_n, by = c('sample1'='strain_qcd')) %>% left_join(., strn_qcd_n, by = c('sample2'='strain_qcd'), suffix = c('_1', '_2')) %>% mutate(id1 = paste0(sample1, '\n[', n_1, ']'), id2 = paste0(sample2, '\n[', n_2, ']'))  
+
+##Get the IBD and the number of sites for each pairwise comparison to annotate heatmap
+s_ibdf_nsites_anno <- s_strn_n_ibd_tbl %>% rename('id2' = id1,  'id1' = id2) %>% bind_rows(., s_strn_n_ibd_tbl) %>% mutate(ibdf_nsites = paste0(round(fract_sites_IBD,2), '\n(',N_informative_sites,')'))%>% dplyr::select(starts_with('id'), ibdf_nsites) %>% pivot_wider(names_from = id2, values_from = ibdf_nsites) %>% arrange(id1) %>% mutate(across(starts_with('SC'), ~replace_na(., '1')))%>% column_to_rownames('id1')
+
+
+##Create mirrored matrix and plot
+sibd_pht_mtx <- s_strn_n_ibd_tbl %>% rename('id2' = id1,  'id1' = id2) %>% bind_rows(., s_strn_n_ibd_tbl) %>% dplyr::select(starts_with('id'), fract_sites_IBD) %>%  pivot_wider(names_from = id2, values_from = fract_sites_IBD) %>% arrange(id1) %>% mutate(across(starts_with('SC'), ~replace_na(., 1)))%>% column_to_rownames('id1')  
+  
+sibd_pht<- Heatmap(sibd_pht_mtx,rect_gp = gpar(type = "none"), name='IBD', col = colFun, show_row_names = TRUE, row_names_side = c("left"),
+                 show_column_names = TRUE, show_row_dend = T, 
+                 show_column_dend = T, row_title_rot = 0, cluster_rows = F, cluster_columns = F, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), 
+              heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),
+              # border='black',
+              cell_fun = function(j, i, x, y, width, height, fill) {
+                if(i >= j) {
+                  grid.rect(x, y, width, height, gp = gpar(fill = fill, col = fill))
+                  grid.text(sprintf("%s", s_ibdf_nsites_anno[i, j]), x, y, gp = gpar(fontsize = 13))
+        }
+})
+
+
+sibd_pht
+  
+```
+
+```{r, fig.height=5, fig.width=6}
+##Merge strain numbers to IBD results
+s_strn_n_ibd_tbl = ss_afm_pf7M_cln_gt_hmmibd_f[["msc14.strain_qcd"]] %>% dplyr::select(sample1, sample2, fract_sites_IBD,N_informative_sites) %>% left_join(., strn_qcd_n, by = c('sample1'='strain_qcd')) %>% left_join(., strn_qcd_n, by = c('sample2'='strain_qcd'), suffix = c('_1', '_2')) %>% mutate(id1 = paste0(sample1, '\n[', n_1, ']'), id2 = paste0(sample2, '\n[', n_2, ']'))  
+
+##Get the IBD and the number of sites for each pairwise comparison to annotate heatmap
+s_combi_ibdf_nsites_anno <- s_strn_n_ibd_tbl %>% 
+  rename('id2' = id1,  'id1' = id2) %>% 
+  bind_rows(., s_lqc_strn_n_ibd_tbl) %>% 
+  mutate(ibdf_nsites = paste0(round(fract_sites_IBD,2), '\n(',N_informative_sites,')'))%>% 
+  dplyr::select(starts_with('id'), ibdf_nsites) %>% 
+  pivot_wider(names_from = id2, values_from = ibdf_nsites) %>% 
+  arrange(id1) %>%
+  mutate(across(starts_with('SC'), ~replace_na(., '1')))%>%
+  column_to_rownames('id1')
+
+
+##Create mirrored matrix and plot
+##!!! TIP - Refer to this if you want more complex arrangements https://github.com/jokergoo/ComplexHeatmap/issues/712 - eg different colours for the different half matrices
+s_combi_ibd_pht <- s_strn_n_ibd_tbl %>% 
+  rename('id2' = id1,  'id1' = id2) %>% 
+  bind_rows(., s_lqc_strn_n_ibd_tbl) %>% 
+  dplyr::select(starts_with('id'), fract_sites_IBD) %>%  
+  pivot_wider(names_from = id2, values_from = fract_sites_IBD) %>% 
+  arrange(id1) %>% 
+  mutate(across(starts_with('SC'), ~replace_na(., 1)))%>%
+  column_to_rownames('id1') %>% 
+  as.matrix()%>%
+  Heatmap(., name='IBD', col = colFun, show_row_names = TRUE, row_names_side = c("left"),
+                 show_column_names = TRUE, show_row_dend = T, 
+                 show_column_dend = T, row_title_rot = 0, cluster_rows = F, cluster_columns = F, column_names_gp = gpar(fontsize = 15), row_names_gp = gpar(fontsize = 15), 
+              heatmap_legend_param = list(title_gp = gpar(fontsize = 12, fontface = "bold"), labels_gp = gpar(fontsize = 12)),border='black',
+              cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", s_combi_ibdf_nsites_anno[i, j]), x, y, gp = gpar(fontsize = 13))
+})
+
+s_combi_ibd_pht
+  
+```
+
+
+
+
+```{r}
+
+# k1_ibd_sites_f <- list(gt_fb_vtx_p1_bi_strn_pf7_asx_gam_ibd, gfv_p1_bi_pf7_k7_all_ibd) %>%
+# k8_ibd_sites_f <- list(ss_ag_k6r_pf7M_cln_gt_hmmibd, s_k6r_pf7M_cln_gt_hmmibd) %>%
+k8_ibd_sites_f <- map(ss_afm_pf7M_cln_gt_hmmibd[7:8], ~{
+  tb1=.x
+  list(tb1) %>%
+  map(~{
+    .x%>% 
+      mutate(across(chr,as.character)) %>% 
+  left_join(.,pf_chr_size, by ='chr') %>% 
+  mutate(across(chr, ~factor(., levels = c(1:14)))) %>%
+  unite(., 'comps',sample1, sample2, sep='vs', remove = F) %>%  
+  group_by(chr) %>% 
+  mutate(chr_s = 0, chr_e = size) %>% 
+  ungroup() %>% 
+  mutate(across(different, as.character))
+
+    })
+
+})
+```
+
+
+```{r}
+## Function for chromosome painting
+
+chrom_paintr_ibd <- function(gtypes_comps_tbl, ttl, expn= 100000, x_font_sz = 13) {
+  gtypes_comps_tbl %>% mutate(across(start, ~(./expn)),across(end, ~(./expn)), across(size, ~(./expn))) %>%
+      ggplot()+ 
+      geom_segment(
+    aes(x = 0-(2000/expn), xend = size+(2000/expn), y = chr, yend = chr),
+    linewidth = 3.5, lineend = "round", colour = "black"
+  ) + 
+      geom_segment(
+    aes(x = 0, xend = size, y = chr, yend = chr),
+    linewidth = 2.8, lineend = "round", colour = "white"
+  ) +
+  geom_segment(
+    aes(
+      x = start, xend = end,
+      y =  chr, yend =  chr,
+      colour = rltd
+    ),
+    linewidth = 2.8
+  ) +
+  # scale_color_manual(values = c('Same'= '#D4AF37', 'Different'= '#2C3E50','Both'='lightgrey', 'No SNP'='white'))+ ##prev colours "black" ,"#ffd94d" 
+  scale_color_manual(values = c('Same'= '#DACB7D', 'Different'= '#2C3E50','Both'='#A9B7C5', 'No SNP'='white'))+
+  # facet_wrap(comps~., ncol = 5) +
+      labs(title = ttl) +
+      labs(colour = "Allele \ncomparison", x = 'Position (bases)', y ="Chromosome") +
+  theme_classic() +
+  theme(axis.text.y = element_text(size =  13),
+        axis.text.x = element_text(size =  x_font_sz),
+        # axis.ticks.x = element_blank(),
+        # axis.title = element_text(size = 9),
+        axis.title = element_blank(),
+        # legend.title = element_text(size = 9, face = "bold"),
+        # legend.text = element_text(size = 9),
+        title = element_text(size = 12, face = "bold"),
+        legend.position = "none",
+        plot.background = element_rect(fill = "#bfe5fc")) 
+
+  }
+
+
+```
+
+
+```{r, fig.height=14, fig.width=24}
+ss_afm_k6r_pf7M_ibd <- k8_ibd_sites_f[[1]][[1]] %>% mutate(across(comps, ~str_replace(., 'vs', '_vs_')), rltd = case_when(different == '0' ~ 'Same', different == '1' ~ 'Different')) 
+
+ss_afm_k6r_pf7M_ibd_p <- ss_afm_k6r_pf7M_ibd %>% split(., ~factor(comps)) %>% imap(., ~chrom_paintr_ibd(.x, .y))
+```
+
+
+```{r, fig.height=2.7, fig.width=6}
+ss_afm_k6r_pf7M_ibd_p
+# plot_grid(plotlist = c(ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC3_A_vs_SC4_G")], ss_ag_k6r_pf7M_ibd_p[c("SC3_A_vs_SC4_G")]), ncol = 2)
+```
+
+```{r, fig.height=14, fig.width=24}
+ss_ag_k6r_pf7M_ibd <- k8_ibd_sites_f[[1]][[1]] %>% mutate(across(comps, ~str_replace(., 'vs', '_vs_')), rltd = case_when(different == '0' ~ 'Same', different == '1' ~ 'Different')) 
+
+ss_ag_k6r_pf7M_ibd_p <- ss_ag_k6r_pf7M_ibd %>% split(., ~factor(comps)) %>% imap(., ~chrom_paintr_ibd(.x, .y))
+```
+
+```{r, fig.height=2.7, fig.width=6}
+
+# plot_grid(plotlist = c(ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC1_A_vs_SC8A")], ss_ag_k6r_pf7M_ibd_p[c("SC1_A_vs_SC8A")]), ncol = 2)
+```
+
+```{r, fig.height=2.7, fig.width=6}
+ss_ag_k6r_pf7M_ibd_p
+# plot_grid(plotlist = c(ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC3_A_vs_SC4_G")], ss_ag_k6r_pf7M_ibd_p[c("SC3_A_vs_SC4_G")]), ncol = 2)
+```
+
+```{r, fig.height=2.7, fig.width=12}
+
+plot_grid(plotlist = c(ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC2_A_vs_SC2_G")], ss_ag_k6r_pf7M_ibd_p[c("SC2_A_vs_SC2_G")],ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC6_A_vs_SC6_G")],ss_ag_k6r_pf7M_ibd_p[c("SC6_A_vs_SC6_G")]), ncol = 4)
+```
+
+```{r, fig.height=5.5, fig.width=6}
+plot_grid(
+plot_grid(plotlist = ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC2_A_vs_SC2_G", "SC6_A_vs_SC6_G")], ncol = 1),
+plot_grid(plotlist =ss_ag_k6r_pf7M_ibd_p[c("SC2_A_vs_SC2_G", "SC6_A_vs_SC6_G")], ncol = 1) , nrow = 1
+)
+```
+
+```{r, fig.height=14, fig.width=24}
+s_k6r_ibd <- k8_ibd_sites_f[[2]][[1]]  %>% mutate(across(comps, ~str_replace(., 'vs', '_vs_')), rltd = case_when(different == '0' ~ 'Same', different == '1' ~ 'Different')) 
+
+s_k6r_ibd_comps = s_k6r_ibd %>% split(., ~factor(comps)) %>% names
+s_k6r_ibd_sc7_comps <- c("SC1_vs_SC7", "SC2_vs_SC7", "SC3_vs_SC7", "SC4_vs_SC7", "SC5_vs_SC7", "SC6_vs_SC7")
+s_k6r_xlab_sc7 <- ifelse(s_k6r_ibd_comps %in% s_k6r_ibd_sc7_comps, 13, 0)
+
+s_k6r_ibd_plts <- s_k6r_ibd %>% split(., ~factor(comps)) %>% imap(., ~chrom_paintr_ibd(.x, .y))
+```
+
+```{r}
+s_k6r_ibd_plts_xlab_mod = s_k6r_ibd %>% split(., ~factor(comps)) %>% list(., names(.), s_k6r_xlab_sc7) %>% pmap(., ~chrom_paintr_ibd(..1, ..2, x_font_sz = ..3))
+
+```
+
+```{r}
+s_k6r_ibd_plts[1:3]
+```
+
+
+```{r, fig.height=6, fig.width=8}
+
+plot_grid(plotlist = c(ss_afm_chromp[["msc14.strain_qcd"]][c("SC1_vs_SC2")],ss_afm_chromp[["msc14.strain_qcd"]][c("SC2_vs_SC5")], ss_afm_chromp[["msc14.strain_qcd"]][c("SC2_vs_SC6")],ss_afm_chromp[["msc14.strain_qcd"]][c("SC6_vs_SC7")],ss_afm_chromp[["msc14.strain_qcd"]][c("SC2_vs_SC7")]), ncol = 3)
+```
+
+
+```{r, fig.height=16, fig.width=12}
+## Without position labels in all plots but bottom row
+plot_grid(
+  plot_grid(plotlist = s_chromp_xlab_mod[["msc14.strain_qcd"]][1:5], nrow = 1),
+  plot_grid(plotlist = c(s_chromp_xlab_mod[["msc14.strain_qcd"]][6:9], s_k6r_ibd_plts_xlab_mod[1]), nrow = 1),
+  plot_grid(plotlist = c(s_chromp_xlab_mod[["msc14.strain_qcd"]][10:12], s_k6r_ibd_plts_xlab_mod[c(6,2)]), nrow = 1),
+  plot_grid(plotlist = c(s_chromp_xlab_mod[["msc14.strain_qcd"]][13:14], s_k6r_ibd_plts_xlab_mod[c(10,7,3)]), nrow = 1),
+  plot_grid(plotlist = c(s_chromp_xlab_mod[["msc14.strain_qcd"]][15], s_k6r_ibd_plts_xlab_mod[c(13,11,8,4)]),nrow = 1),
+  plot_grid(plotlist = s_k6r_ibd_plts_xlab_mod[c(15,14,12,9,5)], nrow = 1),
+  ncol = 1
+)
+```
+
+```{r, fig.width= 12, fig.height=15}
+##Put together the plots for annotation
+
+
+plot_grid(plt_ovrl[["msc14.strain_qcd"]] +
+            theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm")),
+          plot_grid(grid.grabExpr(draw(ss_afm_hmap_ibs_m14_noSC8[["msc14.stage_ag_strain_qcd"]])),
+                    plot_grid(
+                      plot_grid(plotlist =ss_afm_chromp[["msc14.stage_ag_strain_qcd"]][c("SC2_A_vs_SC2_G", "SC6_A_vs_SC6_G")], ncol = 1),
+                      plot_grid(plotlist =ss_ag_k6r_pf7M_ibd_p[c("SC2_A_vs_SC2_G", "SC6_A_vs_SC6_G")], ncol = 1) , 
+                      nrow = 1
+                    ),
+                    ncol = 2,
+                    labels = c('B', 'C'),
+                    label_size = 24,
+                    vjust= 0.1
+          )+
+              theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm")),
+              plot_grid(grid.grabExpr(draw(ss_afm_hmap_ibs_m14_noSC8[["msc14.strain_qcd"]])), 
+              # grid.grabExpr(draw(sibd_pht)),
+              grid.grabExpr(draw(s_combi_ibd_pht)),
+              nrow = 1,
+              rel_widths = c(.45, .55),
+              # labels = c('D', 'E', 'F'),
+              labels = c('D', 'E'),
+              label_size = 24,
+              vjust= 0.1) +
+            theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm")),
+          nrow = 3,
+          rel_heights = c(.3, .4, .3),
+          labels = c('A', ''),
+          label_size = 24,
+          vjust= 1
+)
+
+``` 
+
+```{r, fig.height=16, fig.width=12}
+## Without position labels in all plots but bottom row
+s_chromp_xlab_mod_m14_noSC8 <- s_chromp_xlab_mod[["msc14.strain_qcd"]][!str_detect(names(s_chromp_xlab_mod[["msc14.strain_qcd"]]), "_SC8")]
+s_k6r_ibd_plts_xlab_mod_m14_noSC8 <- s_k6r_ibd_plts_xlab_mod[!str_detect(names(s_k6r_ibd_plts_xlab_mod), "_SC8")]
+
+plot_grid(
+  plot_grid(plotlist = s_chromp_xlab_mod_m14_noSC8[1:5], nrow = 1),
+  plot_grid(plotlist = c(s_chromp_xlab_mod_m14_noSC8[6:9], s_k6r_ibd_plts_xlab_mod_m14_noSC8[1]), nrow = 1),
+  plot_grid(plotlist = c(s_chromp_xlab_mod_m14_noSC8[10:12], s_k6r_ibd_plts_xlab_mod_m14_noSC8[c(6,2)]), nrow = 1),
+  plot_grid(plotlist = c(s_chromp_xlab_mod_m14_noSC8[13:14], s_k6r_ibd_plts_xlab_mod_m14_noSC8[c(10,7,3)]), nrow = 1),
+  plot_grid(plotlist = c(s_chromp_xlab_mod_m14_noSC8[15], s_k6r_ibd_plts_xlab_mod_m14_noSC8[c(13,11,8,4)]),nrow = 1),
+  plot_grid(plotlist = s_k6r_ibd_plts_xlab_mod_m14_noSC8[c(15,14,12,9,5)], nrow = 1),
+  ncol = 1
+)
+```
+
+
+```{r, fig.height=8, fig.width=20}
+# k8_ibd_sites_f %>%
+#   map(~{
+#     .x%>%
+# ggplot() +
+#   geom_segment(
+#     aes(x = 0, xend = chr_e, 
+#         y = comps, yend = comps),
+#     linewidth = 2.5, lineend = "round", colour = "grey75"
+#   ) +
+#   geom_segment(
+#     aes(
+#       x = start, xend = end,
+#       y =  comps, yend =  comps,
+#       colour = different
+#     ),
+#     linewidth = 2.5
+#   ) +
+#   scale_color_manual(values = c('0'='#D4AF37', '1'='#2C3E50'))+
+#   facet_wrap(chr~., ncol = 5)+
+#   theme_classic() +
+#   theme(strip.text = element_text(size = 12, face = 'bold'),
+#         axis.text = element_text(size = 12))
+#     
+#     
+#   })
+
+```
+
+```{r, fig.height=14, fig.width=24}
+# g8_ibd_chrom_ps <- k8_ibd_sites_f %>%
+#   map(~{
+#     
+# a_plt<- .x %>%
+# ggplot() +
+#   geom_segment(
+#     aes(x = 0, xend = chr_e, y = chr, yend = chr),
+#     linewidth = 2, lineend = "round", colour = "grey75"
+#   ) +
+#   geom_segment(
+#     aes(
+#       x = start, xend = end,
+#       y =  chr, yend =  chr,
+#       colour = different
+#     ),
+#     linewidth = 2
+#   ) +
+#   scale_color_manual(values = c('0'='black', '1'='#ffd94d'))+
+#   facet_wrap(comps~., ncol = 5) +
+#   theme_classic() +
+#   theme(strip.text = element_text(size = 12, face = 'bold'),
+#         axis.text = element_text(size = 12))
+# a_plt
+# })
+```
+
+
+```{r, fig.height=6, fig.width=20}
+# k8_ibd_sites_f %>%
+#   map(~{
+#     
+# b_plt<-.x %>% 
+#   ggplot(aes(x=end,y=Nsnp, color = different, fill = different)) +
+#   geom_col() + 
+#   ggplot2::facet_wrap(comps ~ ., ncol = 5)+theme_classic() + 
+#   scale_color_manual(values = c('0'='black', '1'='#ffd94d'))+ 
+#   scale_fill_manual(values = c('0'='black', '1'='#ffd94d'))+
+#   theme(strip.text = element_text(size = 14, face = 'bold'),
+#         axis.text = element_text(size = 13),
+#         axis.text.x = element_text(angle = 45, hjust = 1))
+# b_plt
+# })
+```
+
+```{r, fig.height=12, fig.width=14}
+# cowplot::plot_grid(a_plt+ 
+#                         theme(axis.text.x = element_blank(),
+#                               axis.ticks.x = element_blank(),
+#                               axis.title.x = element_blank() ), 
+#                    b_plt ,
+#                    nrow = 2,
+#                    ncol = 1,
+#                    labels = "auto",
+#                    align = "h"
+#                    )
+```
+
+
+```{r, fig.height=6, fig.width=20}
+k8_ibd_sites_f[[1]] %>%
+  map(~{
+    .x%>% 
+      mutate(across(Nsnp, as.character)) %>%
+ggplot() +
+  geom_segment(
+    aes(x = 0, xend = chr_e, 
+        y = comps, yend = comps),
+    linewidth =  1.5, lineend = "round", colour = "grey75"
+  ) +
+  geom_segment(
+    aes(
+      x = start, xend = end,
+      y =  comps, yend =  comps,
+      colour = different
+    ),
+    linewidth = 1.5
+  ) +
+  scale_color_manual(values = c('0'='black', '1'='#ffd94d'))+
+  geom_label_repel(aes(label=Nsnp, x=(start + end)/2, y = comps), size=4,label.padding = unit(0.05, "lines"),alpha = 1,label.size = 0.01, color = alpha('black', .2)) +
+  facet_wrap(chr~., ncol = 7)+
+  theme_classic() +
+  theme(strip.text = element_text(size = 14, face = 'bold'),
+        axis.text = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1)) 
+  })
+```
+
+```{r, fig.height=6, fig.width=20}
+k8_ibd_sites_f[[2]][[1]] %>% group_by(chr) %>% group_split() %>%
+  map(~{
+    .x%>% 
+      mutate(across(Nsnp, as.character)) %>%
+ggplot() +
+  geom_segment(
+    aes(x = 0, xend = chr_e, 
+        y = comps, yend = comps),
+    linewidth =  1.5, lineend = "round", colour = "grey75"
+  ) +
+  geom_segment(
+    aes(
+      x = start, xend = end,
+      y =  comps, yend =  comps,
+      colour = different
+    ),
+    linewidth = 1.5
+  ) +
+  scale_color_manual(values = c('0'='black', '1'='#ffd94d'))+
+  geom_label_repel(aes(label=Nsnp, x=(start + end)/2, y = comps), size=4,label.padding = unit(0.05, "lines"),alpha = 1,label.size = 0.01, color = alpha('black', .2)) +
+  facet_wrap(chr~., ncol = 7)+
+  theme_classic() +
+  theme(strip.text = element_text(size = 14, face = 'bold'),
+        axis.text = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1)) 
+  })
+```
+
+
+```{r, fig.height=7, fig.width=20}
+k8_ibd_sites_f[[1]] %>%
+  map(~{
+    .x%>% 
+ggplot() +
+  geom_segment(
+    aes(x = 0, xend = chr_e, 
+        y = chr, yend = chr),
+    linewidth = 3.5, lineend = "round", colour = "grey75"
+  ) +
+  geom_segment(
+    aes(
+      x = start, xend = end,
+      y =  chr, yend =  chr,
+      colour = Nsnp#,
+      # fill = Nsnp,
+    ),
+    linewidth = 3
+  ) +
+  # scale_color_manual(values = c('0'='black', '1'='#ffd94d'))+
+  facet_wrap(comps~., ncol = 6) +
+  theme_classic() +
+  theme(strip.text = element_text(size = 14, face = 'bold'),
+        axis.text = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+```
+
+HMMIBD END!!!!!!!!!!!!!
+
+igraph
+```{r}
+# #==========================================================
+# # Function to create an adjacency matrix
+# #=========================================================
+# construct_adj_matrix = function(Result, Entry){
+#   
+#   sample_names = unique(c(as.character(Result$individual1), as.character(Result$individual2)))
+#   sample_count = length(sample_names)
+#   adj_matrix = array(data = NA, dim = c(sample_count, sample_count), 
+#                      dimnames = list(sample_names, sample_names))
+#   for(i in 1:nrow(Result)){
+#     indi = as.character(Result$individual1[i])
+#     indj = as.character(Result$individual2[i])
+#     adj_matrix[indi, indj] = Result[i, Entry]
+#   }
+#   return(adj_matrix)
+# }
+# 
+# 
+# #==========================================================
+# # Function to filter highly related samples within sites
+# #==========================================================
+# rm_highly_related_within = function(Result, Cities, Edge){
+#   
+#   if(Edge){
+#     # Keep edges statistically diff. from one
+#     Result_filtered = Result[Result$`r97.5.` < 1-eps,] 
+#   } else {
+#     # First construct an adjaceny matrix of 97.5% CI IBD
+#     adj_matrix = construct_adj_matrix(Result, Entry = 'r97.5.')
+#     sample_names = rownames(adj_matrix)
+#     
+#     # Second, modify s.t. only edges NOT statistically diff. from one
+#     adj_matrix_high = adj_matrix
+#     adj_matrix_high[adj_matrix < 1-eps] = 0
+#     
+#     # Third, create a graph and list its components
+#     G = graph_from_adjacency_matrix(adjmatrix = adj_matrix_high, 
+#                                     mode='upper', 
+#                                     diag=F, weighted = 'w', 
+#                                     add.colnames = T)
+#     S = components(graph = G) # Lists components
+#     
+#     # Forth, draw a single sample per site within a component 
+#     rep_samples = unlist(lapply(1:S$no, function(s){
+#       samples_ids = which(S$membership==s)
+#       if(length(samples_ids) == 1){
+#         rep_samples = sample_names[samples_ids] # If only one sample per component, keep
+#       } else { # Keep one per city
+#         cities = Cities[sample_names[samples_ids]]
+#         # Pick sample with earliest data (deterministically for comparison across plots)
+#         rep_samples = sapply(unique(cities), function(city){
+#           samples_to_choose_from = names(cities)[cities == city]
+#           rep_sample = samples_to_choose_from[which.min(SNPData[samples_to_choose_from, 'COLLECTION.DATE'])]
+#         })
+#       }
+#       return(rep_samples)
+#     }))
+#     
+#     # Fifth, restructure Result s.t. only one sample per city per component
+#     inds = Result$individual1 %in% rep_samples & Result$individual2 %in% rep_samples
+#     Result_filtered = Result[inds,]
+#   }
+#   return(Result_filtered)
+# }
+# 
+# #==========================================================
+# # Function to return city subgraph
+# #==========================================================
+# extract_city_graph = function(x, city1, city2, col_edge = 'white', 
+#                               a = 0, b = 1, c = 2){
+#   inds = V(x)$site == city1|V(x)$site == city2 # indices for cities
+#   z = induced_subgraph(x, vids = which(inds)) # extract subgraph
+#   Jitter_sign = rep(1, length(V(z)$site ))
+#   Jitter_sign[V(z)$site == city2] = -1
+#   # vertical layout
+#   Y = as.numeric(V(z)$site == city1) + (Jitter[V(z)$name] * Jitter_sign)
+#   attr(z, 'layout') = cbind(X = V(z)$date, Y) # Full layout
+#   V(z)$color = M_cols[V(z)$name] # Colour by clonal component
+#   E(z)$weight[is.na(E(z)$weight)] = 0 # NAs introduced when filter edges 
+#   
+#   # Scale edge widths (not weights) and transparancy to range a, b, c
+#   weights_rescaled = a + (b-a) * (E(z)$weight - min(E(z)$weight)) / (max(E(z)$weight) - min(E(z)$weight))
+#   E(z)$width = weights_rescaled * c
+#   E(z)$color = sapply(weights_rescaled, function(x) adjustcolor(col_edge, alpha.f = x)) # Make transparency a function of rhat
+#   v_names = do.call(rbind, strsplit(attributes(E(z))$vnames, split = "\\|"))
+#   edge_col_ind = which(M_cols[v_names[,1]] == M_cols[v_names[,2]] & M_cols[v_names[,1]] != "#FFFFFF")
+#   if(any(edge_col_ind)){
+#     E(z)$color[edge_col_ind] = M_cols[v_names[,1]][edge_col_ind]
+#   }
+#   return(z)}
+
+```
+
+```{r}
+# #################################################################################
+# #' Script to generate and plot a graph of relatedness between samples
+# #################################################################################
+# rm(list = ls())
+# library(igraph) 
+# library(RColorBrewer)
+# source('../igraph_functions.R') # for construct_adj_matrix
+# eps <- 0.01 # threshold below which LCI is considered zero in Taylor et al. 2019
+# a = 0; b = 0.5; c = 0.25 # Scaling parameters for plotting edge width and transparancy
+# PDF <- TRUE
+# 
+# # Load relatedness results and metadata
+# freqs_used <- "Taylor2020"
+# load(sprintf('../../RData/mles_CIs_extended_freqs%s_meta.RData', freqs_used)) 
+# load(sprintf('../../RData/metadata_extended.RData'))
+# load("../../RData/sids_to_remove_from_graphs.RData")
+# 
+# # Define city cols
+# cities <- unique(metadata$City)
+# cols_cities <- array(c(rev(brewer.pal(5, 'Spectral')), 
+#                        brewer.pal(length(cities)-5, 'Dark2')), 
+#                      dimnames = list(cities))
+# 
+# # Remove samples with one or more NA estimate
+# sids_to_keep <- setdiff(metadata$SAMPLE.CODE, sids_remv) 
+# inds_to_keep <- mle_CIs$individual1 %in% sids_to_keep & mle_CIs$individual2 %in% sids_to_keep
+# mles_to_keep <- mle_CIs[inds_to_keep,]
+# 
+# A_est <- construct_adj_matrix(mles_to_keep, Entry = 'rhat')
+# 
+# if(PDF) pdf("../../Plots/Relatedness_graphs.pdf")
+# 
+# for(high_relatedness_threshold in c(0,0.25)){
+#   A_est[A_est < high_relatedness_threshold] <- 0
+#   fields::image.plot(A_est)
+#   
+#   # Create graph 
+#   G_est <- graph_from_adjacency_matrix(A_est, mode='upper', diag=F, weighted = T) 
+#   art_pnts <- names(articulation.points(G_est))
+#   ccompnts <- components(G_est)
+#   
+#   # Add metadata
+#   V(G_est)$marker_count <- metadata[V(G_est)$name,  "snp_count"]
+#   V(G_est)$city <- metadata[V(G_est)$name, "City"]
+#   V(G_est)$color <- cols_cities[V(G_est)$city] 
+#   
+#   weights_rescaled = a + (b-a) * (E(G_est)$weight - min(E(G_est)$weight)) / (max(E(G_est)$weight) - min(E(G_est)$weight))
+#   
+#   # Plot graph 
+#   plot(G_est, 
+#        main = sprintf("High relatedness threshold: %s", high_relatedness_threshold), 
+#        cex.main = 0.75, 
+#        vertex.label.color = "black", 
+#        vertex.label.cex = 1, 
+#        vertex.frame.color = NA,
+#        vertex.label = NA, 
+#        vertex.shape = c("square","circle")[metadata[V(G_est)$name, "PloSGen2020"] + 1],
+#        vertex.size = 0.5*log(metadata[V(G_est)$name, "snp_count"]),
+#        edge.width = weights_rescaled * c, 
+#        edge.color = sapply(weights_rescaled, function(x)adjustcolor('black', alpha.f = x)))
+#   
+#   # Legend
+#   cities_ <- unique(V(G_est)$city)
+#   legend('bottomleft', pch = 16, bty = 'n', cex = 0.5, pt.cex = 1, 
+#          inset = -0.1, col = cols_cities[cities_], legend = cities_)
+#   
+#   # R estimate range
+#   range(A_est, na.rm = T)
+# }
+# 
+# if(PDF) dev.off()
+```
+
