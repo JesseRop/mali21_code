@@ -1,0 +1,1298 @@
+---
+title: "MSC DE (fe/male low-expression VS fe/male hig_count) & GSEA"
+date: '2023-May-27'
+author: 'Jesse Rop'
+output: 
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+---
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr) 
+  library(stringr)
+  library(purrr)
+  library(readr)
+  library(tibble)
+  library(ggplot2)
+  library(tidyr)
+  library(cowplot)
+  library(SeuratData)
+  library(SeuratDisk)
+  library(pheatmap)
+  library(plotly)
+  library(rmarkdown)
+  library(RColorBrewer)
+  library(MAST)
+  library(EnhancedVolcano)
+  # library(org.Pf.plasmo.db)
+  library(clusterProfiler) ##github installation newest version https://github.com/YuLab-SMU/clusterProfiler/issues/434#issuecomment-1048633162 remotes::install_github(c("YuLab-SMU/DOSE", "YuLab-SMU/clusterProfiler", "YuLab-SMU/enrichplot" ))
+  library(Platypus)
+  library(ggvenn)
+  library(tradeSeq)
+  library(MetBrewer)
+  library(ComplexHeatmap)
+  library(fgsea)
+  library(msigdbr)
+  library(slingshot)
+  library(enrichplot)
+  library(chromoMap)
+  library(pdftools)
+  library(SCpubr)
+  library(GGally)
+  library(circlize)
+  library(readxl)
+  library("ggVennDiagram")
+  library(UpSetR)
+  library(ComplexUpset)
+})
+```
+
+# DE within MSC14 field parasites and DE on MSC14 VS MCA V3 parasites
+
+## Variable declarations, read in input files and exploratory visualizations
+
+```{r setup}
+##Set working directory
+knitr::opts_knit$set(root.dir = '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali')
+```
+
+```{r}
+##Assign colour variables for the different plots
+
+sp_colors <- c('Early ring'='#D1EC9F',
+                     'Late ring'='#78C679',
+                     'Early trophozoite'='#FEEEAA',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                     'Gametocyte (developing)'='thistle',
+                     'Gametocyte (female)'='#551A8B',
+                     'Gametocyte (male)'='mediumpurple',
+               'Unassigned'='red', 
+               'Not assigned'='#D6CFC7',
+               'Female (LE)'='#208cf7',
+               # 'Female (HE)'='#551A8B',
+               'Female'='#551A8B',
+               'Male (LE)'='#a894d1',
+               'Male'='mediumpurple',
+               # 'Male (HE)'='mediumpurple',
+               'Failed QC' = 'grey',
+               'Gametocyte (committed)' = '#C399A2', 
+               'Gametocyte (developing)' = '#66444C', 
+               'Gametocyte (branching)' = '#66444C', 
+               'Gametocyte (early female)' = '#749E89', 
+               'Gametocyte (early male)' = '#7D87B2', 
+               'Gametocyte (late female)' = '#4E6D58', 
+               'Gametocyte (late male)' = '#41507B'
+)
+
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   # 'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   'Female'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   'Male'= 'mediumpurple',#'#039911',
+                   ## 'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle'
+)
+
+# strain_dset_lvls = c( "G1", "G2", "G3", "Lab")
+# strain_dset_lvls = c( 'SC1', 'SC2','SC3',  'SC4', 'SC5',  'SC6', 'S7', 'Lab' )
+strain_dset_lvls = c( 'SC1', 'SC2','SC3',  'SC4', 'SC5',  'SC6', 'SC7', 'SC8', 'Lab', 'Doublet')
+
+```
+
+
+```{r}
+##Copy souporcell files for the optimum clusters
+
+##Sample names
+# sample_name_nms <- c("msc33", "msc48","msc49", "msc55", "msc60", "msc66") %>% sort()
+sample_name_nms <- c("MSC1", "MSC3","MSC13") %>% str_sort(numeric = T)
+sample_name_nms_all <- c("MSC1", "MSC3","MSC13","MSC14") %>% str_sort(numeric = T)
+
+##Sample irods IDs
+# source_irods_nms <- list("5736STDY13782211","5736STDY13782212","5736STDY13782213","5736STDY13782214","5736STDY13782215", "5736STDY13437393") %>% set_names(sample_name_nms)
+
+source_irods_nms <- list("5736STDY11771535","5736STDY11771536","5736STDY11771544") %>% set_names(sample_name_nms)
+
+
+# sample_ids <- paste0(sample_name_nms, '_', source_irods_nms) %>% set_names(sample_name_nms)
+sample_ids <- paste0(sample_name_nms, '_', source_irods_nms) %>% set_names(sample_name_nms)
+
+trip = 'Mali'
+
+
+```
+
+
+
+```{r, message=FALSE}
+##Metadata from all p.falciparum genes downloaded from plasmoDB
+Pf3D7_genes_plasmoDB <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3d7_Genes_Summary_270922.csv") %>% 
+  dplyr::rename("gene_id" = `Gene ID` ) %>% 
+  group_by(gene_id) %>% 
+  add_count(name='gn_iso') %>% 
+  ungroup() %>%
+  mutate(across(gene_id, ~case_when(gn_iso>1 ~ source_id,
+                                    TRUE ~ as.character(.)))) %>% 
+  mutate(across(gene_id, ~str_replace(.,"_", "-")))%>%
+  dplyr::rename('Gene_name' = `Gene Name or Symbol`, 'Ka_Ks' = `NonSyn/Syn SNP Ratio All Strains`, 'TM_domains'=`# TM Domains`) %>% 
+  mutate(across(where(is.character), ~na_if(., "N/A")),
+         Gene = coalesce(`Gene_name`, gene_id)
+  )  %>%
+  group_by(Gene) %>% 
+  add_count() %>% 
+  ungroup() %>%
+  mutate(across(Gene, ~case_when(n>1 ~ paste0(.,'_', gene_id),
+                                 TRUE ~ as.character(.)))) 
+
+```
+
+
+```{r}
+##Field datasets (MSC1,3,13,14,1272C)
+
+msc_qcd_anotd <- readRDS("data/processed/DB52e_star/msc_qcd_anotd.RDS") 
+
+```
+
+
+```{r}
+## Copy the gene lists to make do GO overrepresentation test
+mfet_gns_3.13.14_don_colps <- readRDS("data/processed/msc14/5736STDY11771546_DB52e_star/mf_le_he/mfet_gns_3.13.14_don_colps.RDS")
+
+```
+
+```{r, eval=T}
+##Copy souporcell files for the optimum clusters
+trip = "Mali"
+
+# for (k in c(6,8)) {
+# for (smpl in c('stage_afm_strain_qcd', 'stage_ag_strain_qcd', 'strain_qcd')) {
+for (i in 1:length(sample_name_nms_all)) {
+
+  system(paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/', str_to_lower(sample_name_nms_all[i]),'/vcyto_results')
+          )
+        system(paste0('rsync -av jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/',trip,'/data/processed/DB52e_star/', str_to_lower(sample_name_nms_all[i]),'/vcyto_results/*.loom /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/', str_to_lower(sample_name_nms_all[i]),'/vcyto_results/')
+          )
+      
+}
+```
+
+
+
+```{r}
+## Read loom
+# m14_s_us_loom <- SeuratWrappers::ReadVelocity("data/processed/msc14/5736STDY11771546_DB52e_star/vcyto_results/possorted_genome_bam_JNORH.loom")
+
+m_s_us_loom <- list.files(paste0("data/processed/DB52e_star"), pattern = "possorted_genome_bam.*loom", full.names = T, recursive = T, include.dirs = T) %>%
+set_names(nm = (str_remove_all(.,'data/processed/DB52e_star/|vcyto_results/') %>% str_replace_all(., '/', '_'))) %>%
+  map(., ~SeuratWrappers::ReadVelocity(.))
+  
+m_s_us_loom <- m_s_us_loom[as.numeric(map(str_to_lower(sample_name_nms_all), ~which(str_detect(.x, c(str_replace(names(m_s_us_loom), "_possorted.*", "\\\\b"))))))]
+```
+
+
+```{r}
+## fhe fle
+m_stgs = c('Female', 'Female (LE)', 'Male', 'Male (LE)', 'Late ring', 'Early trophozoite')
+
+m_s_us_ratio <- pmap(list(m_s_us_loom, map(names(m_s_us_loom), ~str_remove_all(., "msc[0-9]*_|.loom")), msc_qcd_anotd[1:4]), ~{
+  loom = ..1
+  l_id = ..2
+  seu = ..3
+  map(m_stgs, ~{
+    tryCatch({
+  rowSums( loom$unspliced[,seu@meta.data %>% 
+                         filter(stageHL == .x) %>% 
+                         rownames() %>% 
+                         str_replace(., '-1', 'x') %>% 
+                         paste0(l_id, ':',.)])/rowSums(loom$spliced[,seu@meta.data %>% 
+                            filter(stageHL == .x) %>% 
+                            rownames() %>% 
+                            str_replace(., '-1', 'x') %>% paste0(l_id, ':',.)])
+    }, error = function(e) {
+      message(as.character('no unassigned cells')) # exclude this line to return NULL quietly
+      return(NULL)
+    })
+}) %>% set_names(m_stgs) %>% discard(is.null) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols %>% filter(if_any(everything(), ~ .>0 & .<Inf)) %>% rownames_to_column('gene_id') %>% mutate(across(gene_id, ~str_replace(., '_', '-')))
+  })
+
+```
+
+
+```{r}
+pf_intronic_gns <- Pf3D7_genes_plasmoDB %>% filter(`# Exons in Gene`>1) %>% pull(gene_id)
+
+pf_intronic_gns <- Pf3D7_genes_plasmoDB %>% filter(`# Exons in Gene`>1) %>% pull(gene_id)
+
+
+map(m_s_us_ratio, ~.x %>% filter(!gene_id %in% pf_intronic_gns ))
+
+```
+
+
+```{r}
+## fhe fle
+
+map(m_s_us_ratio, ~..1 %>% pivot_longer(cols = -c('gene_id'), names_to = 'stage', values_to = 's_us_ratio') %>% filter(!is.na(s_us_ratio) & s_us_ratio!=Inf) %>% ggplot(aes(x=stage, y=log10(s_us_ratio))) + geom_boxplot())
+```
+
+
+#### Average expression of 511 Lasonder translationally repressed genes in MSC {.tabset}
+```{r, message=FALSE}
+lasonder_tr <- read_xlsx('data/raw/published_lit/lasonder/supp_512_TR_genes.xlsx', skip = 4)
+tr_gns <- lasonder_tr %>% dplyr::rename('gene_id' = `Gene ID...1`) %>% pull(gene_id) %>% str_replace(.,'_', '-')
+tr_gns <- tr_gns[str_detect(tr_gns, 'PF3D7-')]
+```
+
+```{r}
+## fhe fle
+
+map(m_s_us_ratio, ~..1 %>% filter(gene_id %in% tr_gns) %>% pivot_longer(cols = -c('gene_id'), names_to = 'stage', values_to = 's_us_ratio') %>% filter(!is.na(s_us_ratio) & s_us_ratio!=Inf) %>% ggplot(aes(x=stage, y=log10(s_us_ratio))) + geom_boxplot())
+
+map(m_s_us_ratio[2:4], ~..1 %>% filter(gene_id %in% tr_gns) %>% filter(if_all(contains("Female"), ~.>0 & .<Inf)) %>% ggplot(aes(x= log10(`Female (LE)`), y=log10(`Female`))) + geom_point() + geom_abline() + geom_smooth())
+```
+
+
+```{r}
+## genes in lasonder and in fh and fl
+
+map2(m_s_us_ratio[2:4], msc_3_13_14_fle_p[1:3], ~.x %>% filter(`Female (LE)` != Inf & gene_id %in% .y & gene_id %in% tr_gns) %>% arrange(desc(`Female (LE)`)))
+```
+
+
+##gene sets in phenoplasm output
+```{r}
+## Copy the gene lists to make do GO overrepresentation test
+phenop_lehe <- read_delim('data/raw/phenoplasm_output/phenotype_both_LE_HE.txt', delim = '\t', skip = 2)
+phenop_nle <- read_delim('data/raw/phenoplasm_output/phenotype_not_in_LE.txt', delim = '\t', skip = 2)
+
+```
+
+```{r}
+## Read Ngwa 2013 paper on the assesment of changes in transcriptome after 30 minutes activation using (SSH) technique method which amplifies induced genes while simultaneously suppressing house-keeping genes, and is thus particularly suited to discover new or unexpected genes
+ngwa_activ_gams <- read_csv("data/raw/published_lit/ngwa_2013_activated_gametocytes_t_ome/initial_phase_of_mosquito_transcriptome.csv") %>% rename('gene_id' = `Plasmodb ID`) %>% mutate(across(gene_id, ~str_replace(.,'_', '-')))
+
+```
+
+```{r}
+## Check the prevalence of the different subsets in the Ngwa genes
+
+# mfet_gns_3.13.14_don_colps %>% filter(FLE_genes == 'y') %>% filter(gene_id %in% ngwa_activ_gams$gene_id)
+# mfet_gns_3.13.14_don_colps %>% filter(MLE_genes == 'y') %>% filter(gene_id %in% ngwa_activ_gams$gene_id)
+
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$MLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$MLE_genes),]$gene_id %in% ngwa_activ_gams$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$FLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$FLE_genes),]$gene_id %in% ngwa_activ_gams$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$F_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$F_genes),]$gene_id %in% ngwa_activ_gams$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$M_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$M_genes),]$gene_id %in% ngwa_activ_gams$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$fh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$fh_only),]$gene_id %in% ngwa_activ_gams$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$mh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$mh_only),]$gene_id %in% ngwa_activ_gams$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$gam_noasex == 'y' & !is.na(mfet_gns_3.13.14_don_colps$gam_noasex),]$gene_id %in% ngwa_activ_gams$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$asex_nogam == 'y' & !is.na(mfet_gns_3.13.14_don_colps$asex_nogam),]$gene_id %in% ngwa_activ_gams$gene_id))
+
+
+```
+
+```{r}
+##  talman male gamete proteome - gametocytes were allowed to activate in exflagellation medium - supernatant with male gametes that had swum from the pellet
+talman_male_gamete_pome <- read_xlsx("data/raw/published_lit/talman2014_male_gamete_proteins/male_gamete_proteome.xlsx", skip = 3)
+
+##ortholog file to translate to falciparum IDs
+ortho <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/ortho4.csv")
+
+talman_male_gamete_pome <- talman_male_gamete_pome %>% inner_join(., ortho %>% dplyr::select(berghei, falciparum) %>% mutate(across(berghei, ~str_remove(., '0$'))), by = c('Accession Number'='berghei')) %>% mutate(across(falciparum, ~str_replace(.,'_', '-'))) %>% rename('gene_id' = falciparum)
+```
+
+
+
+```{r}
+## Check the prevalence of the different subsets in the talman male gamete proteome
+
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$MLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$MLE_genes),]$gene_id %in% talman_male_gamete_pome$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$FLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$FLE_genes),]$gene_id %in% talman_male_gamete_pome$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$F_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$F_genes),]$gene_id %in% talman_male_gamete_pome$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$M_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$M_genes),]$gene_id %in% talman_male_gamete_pome$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$fh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$fh_only),]$gene_id %in% talman_male_gamete_pome$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$mh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$mh_only),]$gene_id %in% talman_male_gamete_pome$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$gam_noasex == 'y' & !is.na(mfet_gns_3.13.14_don_colps$gam_noasex),]$gene_id %in% talman_male_gamete_pome$gene_id))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$asex_nogam == 'y' & !is.na(mfet_gns_3.13.14_don_colps$asex_nogam),]$gene_id %in% talman_male_gamete_pome$gene_id))
+
+
+```
+
+
+```{r}
+##  talman male gamete proteome - gametocytes were allowed to activate in exflagellation medium - supernatant with male gametes that had swum from the pellet
+zeeshan_kinesin13ptdKO_WTDE <- read_xls("data/raw/published_lit/zeeshan2022_kinesins/DE_kinesinKO_WTactivgam.xls", sheet = 'S1C', skip = 2)
+
+##ortholog  translate to falciparum IDs
+zeeshan_kinesin13ptdKO_WTDE <- zeeshan_kinesin13ptdKO_WTDE %>% inner_join(., ortho %>% dplyr::select(berghei, falciparum), by = c('Gene ID'='berghei')) %>% mutate(across(falciparum, ~str_replace(.,'_', '-'))) %>% rename('gene_id' = falciparum)
+```
+
+
+```{r}
+## Check the prevalence of the different subsets in the talman male gamete proteome
+
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$MLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$MLE_genes),]$gene_id %in% (zeeshan_kinesin13ptdKO_WTDE %>% filter(`Log2Fold Change` <0) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$FLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$FLE_genes),]$gene_id %in% (zeeshan_kinesin13ptdKO_WTDE %>% filter(`Log2Fold Change` <0) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$F_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$F_genes),]$gene_id %in% (zeeshan_kinesin13ptdKO_WTDE %>% filter(`Log2Fold Change` <0) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$M_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$M_genes),]$gene_id %in% (zeeshan_kinesin13ptdKO_WTDE %>% filter(`Log2Fold Change` <0) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$fh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$fh_only),]$gene_id %in% (zeeshan_kinesin13ptdKO_WTDE %>% filter(`Log2Fold Change` <0) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$mh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$mh_only),]$gene_id %in% (zeeshan_kinesin13ptdKO_WTDE %>% filter(`Log2Fold Change` <0) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$gam_noasex == 'y' & !is.na(mfet_gns_3.13.14_don_colps$gam_noasex),]$gene_id %in% (zeeshan_kinesin13ptdKO_WTDE %>% filter(`Log2Fold Change` <0) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$asex_nogam == 'y' & !is.na(mfet_gns_3.13.14_don_colps$asex_nogam),]$gene_id %in% (zeeshan_kinesin13ptdKO_WTDE %>% filter(`Log2Fold Change` <0) %>% pull(gene_id))))
+
+
+```
+
+
+```{r}
+##  Hitz pfmap2 on male gametogenesis and gene expression
+##  ON pfmap2 switched on; Off pfmap2 switched off; act. - activated for 15 min by XA 
+## Cy5/Cy3 microarray
+map2KO_WT_male_exflagellateDE <- read_xlsx("data/raw/published_lit/hitz2020_pfmap2_malegametogenesis/map2KO_WT_male_exflagellateDE.xlsx") %>% mutate(across(GeneID, ~str_replace(.,'_', '-'))) %>% rename('gene_id' = 'GeneID') 
+
+read_xlsx("data/raw/published_lit/hitz2020_pfmap2_malegametogenesis/map2KO_WT_male_exflagellateDE.xlsx")
+```
+
+
+```{r}
+##Correlation of 15 min XA(xanthurenic acid)-activated VS non-activated stage V gametocytes transcriptome from hitz etal 2020. They report no DE same as here. 
+map2KO_WT_male_exflagellateDE %>% 
+  mutate(across(-c('gene_id', 'DESCRIPTION', 'gametocyte genes (Young, 2005)'), as.numeric)) %>% 
+  rowwise() %>%
+    mutate(avg_XA_act_gam = mean(c_across(`stage V ON act. (repl. 1)`:`stage V ON act. (repl. 2)`)),
+           avg_gam = mean(c_across( `stage V ON (repl. 1)`:`stage V ON (repl. 2)`))) %>%
+  ggplot(aes(x= avg_XA_act_gam, y= avg_gam)) + 
+  geom_point()
+```
+
+```{r}
+## Check the prevalence of the different subsets in the talman male gamete proteome
+
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$MLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$MLE_genes),]$gene_id %in% (map2KO_WT_male_exflagellateDE %>% filter(`stage V ON act. (repl. 1)` > 3 & `stage V ON act. (repl. 2)` > 3)  %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$FLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$FLE_genes),]$gene_id %in% (map2KO_WT_male_exflagellateDE %>% filter(`stage V ON act. (repl. 1)` > 3 & `stage V ON act. (repl. 2)` > 3)  %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$F_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$F_genes),]$gene_id %in% (map2KO_WT_male_exflagellateDE %>% filter(`stage V ON act. (repl. 1)` > 3 & `stage V ON act. (repl. 2)` > 3)  %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$M_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$M_genes),]$gene_id %in% (map2KO_WT_male_exflagellateDE %>% filter(`stage V ON act. (repl. 1)` > 3 & `stage V ON act. (repl. 2)` > 3)  %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$fh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$fh_only),]$gene_id %in% (map2KO_WT_male_exflagellateDE %>% filter(`stage V ON act. (repl. 1)` > 3 & `stage V ON act. (repl. 2)` > 3)  %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$mh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$mh_only),]$gene_id %in% (map2KO_WT_male_exflagellateDE %>% filter(`stage V ON act. (repl. 1)` > 3 & `stage V ON act. (repl. 2)` > 3)  %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$gam_noasex == 'y' & !is.na(mfet_gns_3.13.14_don_colps$gam_noasex),]$gene_id %in% (map2KO_WT_male_exflagellateDE %>% filter(`stage V ON act. (repl. 1)` > 3 & `stage V ON act. (repl. 2)` > 3)  %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$asex_nogam == 'y' & !is.na(mfet_gns_3.13.14_don_colps$asex_nogam),]$gene_id %in% (map2KO_WT_male_exflagellateDE %>% filter(`stage V ON act. (repl. 1)` > 3 & `stage V ON act. (repl. 2)` > 3)  %>% pull(gene_id))))
+
+
+```
+
+C3 indicated to be the earliest developmental stage, followed by C1, C0, and C2 and ending with C4 as the terminal cluster
+```{r}
+##  scRNAseq of mosquito midgut smartseq2 a.gambiae fed nf54 gams and microdisection used to harvest viable parasites from timepoint 2hours to 20 hours . 
+## From unfertilized female gametes to zygote / ookinete
+## C3 indicated to be the earliest developmental stage, followed by C1, C0, and C2 and ending with C4 as the terminal cluster
+## clusters C3 and C1 align with pt0 and represent early zygote development and C0 aligns with pt1 and represents the maturing zygote to early ookinete development, whereas C2 and C4 align with pt2 and represent mid- to late ookinete development
+
+moha_DE_cluster_markers <- read_xlsx("data/raw/published_lit/mohammed2023_scrnaseq_mosq_gut/DE_cluster_markers.xlsx", skip=1) %>% mutate(across(`Gene ID`, ~str_replace(.,'_', '-'))) %>% rename('gene_id' = 'Gene ID') 
+
+##Very few genes for meaningful comparison
+moha_DE_cluster_markers %>% filter(cluster %in% c('C_3', 'C_1') & `p_val_adj (Bonferroni correction)` < 0.05)
+```
+
+C3 indicated to be the earliest developmental stage, followed by C1, C0, and C2 and ending with C4 as the terminal cluster
+```{r}
+##  Kaneko gsnf2 k vs wt
+
+kaneko_gnsf2_ko_gns <- read_xlsx("data/raw/published_lit/kaneko2023_gsnf2_male_game/kaneko2023_gsnf2_chromatin.xlsx") 
+
+##ortholog  translate to falciparum IDs
+kaneko_gnsf2_ko_gns <- kaneko_gnsf2_ko_gns %>% inner_join(., ortho %>% dplyr::select(berghei, falciparum), by = c('ID'='berghei')) %>% mutate(across(falciparum, ~str_replace(.,'_', '-'))) %>% rename('gene_id' = falciparum)
+```
+
+
+```{r}
+## Check the prevalence of the different subsets in the talman male gamete proteome
+
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$MLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$MLE_genes),]$gene_id %in% (kaneko_gnsf2_ko_gns %>% filter(!is.na(`Target of gSNF2`) & !is.na(`male-enriched`)) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$FLE_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$FLE_genes),]$gene_id %in% (kaneko_gnsf2_ko_gns %>% filter(!is.na(`Target of gSNF2`) & !is.na(`male-enriched`)) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$F_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$F_genes),]$gene_id %in% (kaneko_gnsf2_ko_gns %>% filter(!is.na(`Target of gSNF2`) & !is.na(`male-enriched`)) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$M_genes == 'y' & !is.na(mfet_gns_3.13.14_don_colps$M_genes),]$gene_id %in% (kaneko_gnsf2_ko_gns %>% filter(!is.na(`Target of gSNF2`) & !is.na(`male-enriched`)) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$fh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$fh_only),]$gene_id %in% (kaneko_gnsf2_ko_gns %>% filter(!is.na(`Target of gSNF2`) & !is.na(`male-enriched`)) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$mh_only == 'y' & !is.na(mfet_gns_3.13.14_don_colps$mh_only),]$gene_id %in% (kaneko_gnsf2_ko_gns %>% filter(!is.na(`Target of gSNF2`) & !is.na(`male-enriched`)) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$gam_noasex == 'y' & !is.na(mfet_gns_3.13.14_don_colps$gam_noasex),]$gene_id %in% (kaneko_gnsf2_ko_gns %>% filter(!is.na(`Target of gSNF2`) & !is.na(`male-enriched`)) %>% pull(gene_id))))
+prop.table(table(mfet_gns_3.13.14_don_colps[mfet_gns_3.13.14_don_colps$asex_nogam == 'y' & !is.na(mfet_gns_3.13.14_don_colps$asex_nogam),]$gene_id %in% (kaneko_gnsf2_ko_gns %>% filter(!is.na(`Target of gSNF2`) & !is.na(`male-enriched`)) %>% pull(gene_id))))
+
+
+```
+
+## MSC DE
+
+### female high vs female low and male low vs male high 
+
+Process takes long so saving analysis to read from file.
+```{r, eval=F}
+#DO NOT DELETE
+
+# set ident
+msc_qcd_anotd[1:4] <- purrr::map(msc_qcd_anotd[1:4], ~SetIdent(., value='stageHL'))
+
+fh_fl_marker_list_3.13.14 <- msc_qcd_anotd[2:4] %>%
+  purrr::map(.  %>% FindMarkers(.,
+                         ident.1 =.@meta.data %>% filter(stageHL == 'Female') %>% rownames(),
+                         ident.2= .@meta.data %>% filter(stageHL == 'Female (LE)') %>% rownames(),
+                         slot = "data",
+                         test.use = 'MAST',
+                         logfc.threshold = -Inf,
+                         min.pct=-Inf
+  ))
+
+saveRDS(fh_fl_marker_list_3.13.14, "data/processed/DB52e_star/fh_fl_marker_list_3.13.14.RDS")
+
+# mh_ml_marker_list_13.14 <- msc_qcd_anotd[1:4] %>%
+mh_ml_marker_list_13.14 <- msc_qcd_anotd[3:4] %>%
+  purrr::map(.  %>% FindMarkers(.,
+                         ident.1 =.@meta.data %>% filter(stageHL == 'Male') %>% rownames(),
+                         ident.2=.@meta.data %>% filter(stageHL == 'Male (LE)') %>% rownames(),
+                         slot = "data",
+                         test.use = 'MAST',
+                         logfc.threshold = -Inf,
+                         min.pct=-Inf
+  ))
+
+saveRDS(mh_ml_marker_list_13.14, "data/processed/DB52e_star/mh_ml_marker_list_13.14.RDS")
+
+```
+
+```{r, eval=F}
+#DO NOT DELETE
+fh_fl_marker_list_acc_strn_3.13.14 <- msc_qcd_anotd[2:4] %>%
+  purrr::map(., ~.x[,!is.na(.x@meta.data$Strain_DN)]  %>% FindMarkers(.,
+                         ident.1 =.@meta.data %>% filter(stageHL == 'Female') %>% rownames(),
+                         ident.2= .@meta.data %>% filter(stageHL == 'Female (LE)') %>% rownames(),
+                         slot = "data",
+                         test.use = 'MAST',
+                         logfc.threshold = -Inf,
+                         min.pct=-Inf,
+                         latent.vars = 'Strain_DN'
+  ))
+
+saveRDS(fh_fl_marker_list_acc_strn_3.13.14, "data/processed/DB52e_star/fh_fl_marker_list_acc_strn_3.13.14.RDS")
+
+mh_ml_marker_list_acc_strn_13.14 <- msc_qcd_anotd[3:4] %>%
+  purrr::map(., ~.x[,!is.na(.x@meta.data$Strain_DN)] %>% FindMarkers(.,
+                         ident.1 =.@meta.data %>% filter(stageHL == 'Male') %>% rownames(),
+                         ident.2=.@meta.data %>% filter(stageHL == 'Male (LE)') %>% rownames(),
+                         slot = "data",
+                         test.use = 'MAST',
+                         logfc.threshold = -Inf,
+                         min.pct=-Inf,
+                         latent.vars = 'Strain_DN'
+  ))
+
+saveRDS(mh_ml_marker_list_acc_strn_13.14, "data/processed/DB52e_star/mh_ml_marker_list_acc_strn_13.14.RDS")
+
+```
+
+
+```{r, eval=T}
+#DO NOT DELETE
+fh_fl_marker_list_acc_strn_3.13.14 <- readRDS("data/processed/DB52e_star/fh_fl_marker_list_acc_strn_3.13.14.RDS")  
+mh_ml_marker_list_acc_strn_13.14 <- readRDS("data/processed/DB52e_star/mh_ml_marker_list_acc_strn_13.14.RDS")
+
+```
+
+```{r, eval=F}
+#DO NOT DELETE
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14 <- msc_qcd_anotd[2:4] %>%
+  purrr::map(., ~.x[,!is.na(.x@meta.data$Strain_DN)] %>% FindMarkers(.,
+                         ident.1 =.@meta.data %>% filter(stageHL == 'Female') %>% rownames(),
+                         ident.2= .@meta.data %>% filter(stageHL == 'Female (LE)') %>% rownames(),
+                         slot = "data",
+                         test.use = 'MAST',
+                         # logfc.threshold = -Inf,
+                         # min.pct=-Inf,
+                         latent.vars = 'Strain_DN'
+  ))
+
+####!! MANUSCRIPT TABLE F VS FL DE
+saveRDS(fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14, "data/processed/DB52e_star/fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14.RDS")
+
+mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14 <- msc_qcd_anotd[3:4] %>%
+  purrr::map(., ~.x[,!is.na(.x@meta.data$Strain_DN)] %>% FindMarkers(.,
+                         ident.1 =.@meta.data %>% filter(stageHL == 'Male') %>% rownames(),
+                         ident.2=.@meta.data %>% filter(stageHL == 'Male (LE)') %>% rownames(),
+                         slot = "data",
+                         test.use = 'MAST',
+                         latent.vars = 'Strain_DN'
+  ))
+
+saveRDS(mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14, "data/processed/DB52e_star/mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14.RDS")
+
+```
+
+
+Merge DE list with annotation
+```{r}
+##female - !!Need to confirm up to date status - fh_fl_marker_list_3.13.14.RDS generated in above so and the chunk turned off to save time then file is stored
+fh_fl_marker_list_3.13.14 <- readRDS( "data/processed/DB52e_star/fh_fl_marker_list_3.13.14.RDS")
+fh_fl_marker_list_3.13.14 <- fh_fl_marker_list_3.13.14 %>%
+  purrr::map(. %>% rownames_to_column('gene_id') %>% 
+        left_join(.,Pf3D7_genes_plasmoDB, by = 'gene_id') 
+  )
+
+##Write out fh_fl_list for msc14 publication
+write.csv(fh_fl_marker_list_3.13.14[[1]], "v3_science_manuscript/tables/msc14_fh_vs_fl.csv")
+```
+
+
+```{r, eval=F}
+fh_fl_marker_list_3.13.14 %>%
+  purrr::map(. %>% dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj))
+```
+
+```{r}
+##female -!!Need to confirm up to date status - fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14.RDS generated in above so and the chunk turned off to save time then file is stored
+
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14 <- readRDS( "data/processed/DB52e_star/fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14.RDS")
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14 <- fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14 %>%
+  purrr::map(. %>% rownames_to_column('gene_id') %>% 
+        left_join(.,Pf3D7_genes_plasmoDB, by = 'gene_id') %>%
+        dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, p_val_adj, `Product Description` ) %>%
+        arrange(desc(avg_log2FC))
+  )
+
+##Write out fh_fl_list for msc14 publication
+write.csv(fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]], "v3_science_manuscript/tables/msc14_fh_vs_fl_acc_strn_lfc.25_mp.1.csv")
+
+##male -!!Need to confirm up to date status - mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14.RDS generated in above so and the chunk turned off to save time then file is stored
+
+mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14 <- readRDS( "data/processed/DB52e_star/mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14.RDS")
+mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14 <- mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14 %>%
+  purrr::map(. %>% rownames_to_column('gene_id') %>% 
+        left_join(.,Pf3D7_genes_plasmoDB, by = 'gene_id') %>%
+        dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, p_val_adj, `Product Description` ) %>%
+        arrange(desc(avg_log2FC))
+  )
+
+##Write out mh_ml_list for msc14 publication
+write.csv(mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14[[1]], "v3_science_manuscript/tables/msc14_mh_vs_ml_acc_strn_lfc.25_mp.1.csv")
+```
+
+```{r}
+##male -!!Need to confirm up to date status - mh_ml_marker_list_13.14.RDS generated in above so and the chunk turned off to save time then file is stored
+mh_ml_marker_list_13.14 <- readRDS( "data/processed/DB52e_star/mh_ml_marker_list_13.14.RDS")
+mh_ml_marker_list_13.14 <- mh_ml_marker_list_13.14 %>%
+  purrr::map(. %>% rownames_to_column('gene_id') %>% 
+        left_join(.,Pf3D7_genes_plasmoDB, by = 'gene_id') 
+  )
+
+
+```
+
+```{r, eval=F}
+##male
+mh_ml_marker_list_13.14 %>%
+  purrr::map(. %>% dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj))
+```
+
+Tabulate selec set of genes
+```{r, eval=F}
+
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14 %>%
+  purrr::map(. %>% dplyr::filter(pct.1 >0.9 &  pct.2 <0.1 ) %>% dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2,  p_val_adj))
+```
+
+```{r, eval=F}
+
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14 %>%
+  purrr::map(. %>% dplyr::filter(avg_log2FC < 0 & pct.1 <0.5 &  pct.2 >0.3) %>% arrange(avg_log2FC) %>% dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2,  p_val_adj))
+```
+
+#### female high vs female low DE visualization
+```{r, fig.height=7, fig.width=7}
+
+fh_fl_vlcano <- EnhancedVolcano(fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]],
+                lab = fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]]$Gene,
+                selectLab =fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% 
+                  filter(p_val_adj < 0.05 & (avg_log2FC > 2 | avg_log2FC < -2) & !str_detect(Gene, 'PF3D7')) %>%
+                  pull(Gene),
+                x = 'avg_log2FC',
+                y = 'p_val_adj',
+                pCutoff = 0.05,
+                FCcutoff = 2,
+                pointSize = 1.5,
+                labSize = 5.0,
+                title = '',
+                subtitle = "",
+                titleLabSize = 0,
+                subtitleLabSize = 0,
+                axisLabSize = 24,
+                drawConnectors = TRUE,
+                legendLabels =c(expression(Log[2] ~ FC), "p-value"),
+                gridlines.minor = FALSE)
+
+fh_fl_vlcano
+
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+saveRDS(fh_fl_vlcano, "plots/figS26/fh_fl_vlcano.RDS")
+```
+
+```{r}
+##Number of genes for manuscript
+#Significant P <0.05
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<0.05) %>% dim
+#upregulated in F
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<0.05 & avg_log2FC > 0) %>% dim
+#upregulated in FLE
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<0.05 & avg_log2FC < 0) %>% dim
+
+#Highly DE lfc 2
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<0.05 & (avg_log2FC > 2 | avg_log2FC < -2)) %>% dim
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<0.05 & avg_log2FC > 2) %>% dim
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<0.05 & avg_log2FC < -2) %>% dim
+
+
+##Number of genes for manuscript
+#Highly significant P= 10e-70
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<10e-70) %>% dim
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<10e-70 & avg_log2FC > 0) %>% dim
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<10e-70 & avg_log2FC < 0) %>% dim
+
+#Highly DE lfc 2
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<10e-70 & (avg_log2FC > 2 | avg_log2FC < -2)) %>% dim
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<10e-70 & avg_log2FC > 2) %>% dim
+fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>% filter(p_val_adj<10e-70 & avg_log2FC < -2) %>% dim
+```
+
+
+
+#### female high vs female low DE visualization
+```{r, fig.height=7, fig.width=7}
+
+EnhancedVolcano(mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14[[1]],
+                lab = mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14[[1]]$Gene,
+                selectLab =mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14[[1]] %>% 
+                  filter(p_val_adj < 10e-15 & (avg_log2FC > 1 | avg_log2FC < -1) & !str_detect(Gene, 'PF3D7')) %>%
+                  pull(Gene),
+                x = 'avg_log2FC',
+                y = 'p_val_adj',
+                pCutoff = 10e-15,
+                FCcutoff = 1,
+                pointSize = 3.0,
+                labSize = 7.0,
+                title = '',
+                subtitle = "",
+                titleLabSize = 0,
+                subtitleLabSize = 0,
+                axisLabSize = 24,
+                drawConnectors = TRUE,
+                legendLabels =c(expression(Log[2] ~ FC), "p-value"),
+                gridlines.minor = FALSE)
+```
+
+
+#### tabulate female high vs female low ovlp
+```{r}
+
+##up_in_fl_ovlp
+m14_topfl_overlapping <- fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>%
+  filter(avg_log2FC < 0 & p_val_adj < 1e-10) %>% 
+        arrange(avg_log2FC) %>% 
+        pull(gene_id) %>% 
+        str_replace(., '-', '_') %>% 
+        head(.,n=500)
+
+##up_in_fh_ovlp
+m14_topfh_overlapping <- fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14[[1]] %>%
+        filter(avg_log2FC > 0 & p_val_adj < 1e-10) %>% 
+        arrange(avg_log2FC) %>% 
+        pull(gene_id) %>% 
+        str_replace(., '-', '_') %>% 
+        head(.,n=500)
+
+```
+
+
+#### tabulate male high vs male low ovlp
+```{r}
+##up_in_ml_ovlp top500
+m14_topml_overlapping <-  mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14[[1]] %>%
+        filter(avg_log2FC < 0 & p_val_adj < 1e-10) %>% 
+        arrange(avg_log2FC) %>% 
+        pull(gene_id) %>% 
+        str_replace(., '-', '_') %>% 
+        head(.,n=500)
+
+##up_in_mh_ovlp  top500
+m14_topmh_overlapping <- mh_ml_marker_list_acc_strn_lfc.25_mp1_13.14[[1]] %>%
+        filter(avg_log2FC > 0 & p_val_adj < 1e-10) %>%
+        arrange(avg_log2FC) %>% 
+        pull(gene_id) %>% 
+        str_replace(., '-', '_') %>% 
+        head(.,n=500)
+
+
+```
+
+#### overlap between top 500 mh,ml,fh,fl above
+```{r}
+ggvenn(
+  list(topmh = m14_topmh_overlapping,
+       topml= m14_topml_overlapping,
+       topfh= m14_topfh_overlapping,
+       topfl= m14_topfl_overlapping),
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#A46868"),
+  stroke_size = 0.5, set_name_size = 4
+)
+```
+
+```{r, eval=T}
+##FGSEA
+library(fgsea)
+
+Pf3D7_61_gaf_F <-  clusterProfiler::parse_gff("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/PlasmoDB-61_Pfalciparum3D7_GO_F.gaf")
+Pf3D7_61_gaf_F[1] = Pf3D7_61_gaf_F[1] %>% purrr::map(. %>% mutate(across(Gene, ~str_replace(., '_', '-'))))
+
+gene_ids_pf<- data.frame(Pf3D7_61_gaf_F[[1]]) %>% 
+  left_join(., Pf3D7_61_gaf_F[[2]], by= c("GO" = "GOID")) %>% 
+  filter(!is.na(TERM))  %>% 
+  dplyr::select(TERM,Gene) %>% 
+  group_by(TERM) %>% 
+  summarise(genes = paste0(Gene, collapse = ",")) %>% 
+  filter(str_count(genes, 'PF3D7') >10) %>% 
+  deframe() %>% 
+  as.list() %>% 
+  purrr::map(., ~str_split_1(.x, ','))
+
+
+
+ranks<- fh_fl_marker_list_acc_strn_3.13.14[[1]] %>% 
+  rownames_to_column('gene_id')  %>%
+  arrange(desc(avg_log2FC)) %>% dplyr::select(gene_id, avg_log2FC) %>% deframe(.)
+
+fgseaRes<- fgsea(gene_ids_pf, stats = ranks, nPermSimple = 10000)
+
+fgseaResTidy <- fgseaRes %>%
+  as_tibble() %>%
+  arrange(desc(NES)) 
+
+fgseaResTidy %>% filter(padj < 0.05) %>% write_csv("v3_science_manuscript/tables/msc14_fh_fl_gsea.csv")
+
+
+##clusterprofiler
+gsea = clusterProfiler::GSEA(ranks , TERM2GENE = Pf3D7_61_gaf_F$TERM2GENE, TERM2NAME=Pf3D7_61_gaf_F$TERM2NAME, pvalueCutoff = 0.05)
+print(enrichplot::dotplot(gsea))
+
+```
+
+
+```{r, fig.height=7, eval=T}
+##FGSEA
+# library(fgsea)
+
+fh_fl_gsea_bplot<- fgseaResTidy %>% 
+  filter(padj < 0.05) %>% 
+  arrange(padj) %>% 
+  group_by(NES<0) %>% 
+  slice_head(., n = 5) %>%
+  mutate(go_labs = str_wrap(pathway, width = 31)) %>%
+  ggplot(aes(reorder(go_labs, NES), NES)) +
+  geom_col(aes(fill = size/100)) +
+  coord_flip() +
+  labs(x="GO term: Function", y="NES",
+       # title="Hallmark pathways NES from GSEA"
+  ) + 
+  theme_classic()+
+  theme(
+    axis.text.y  = element_text(size = 26),
+    axis.text.x = element_text(size = 26),#, angle = 45
+    axis.title.y  = element_text(size = 24, face = "bold"),
+    axis.title.x = element_text(size = 24, face = "bold"),
+    # axis.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 22),
+    legend.title = element_text(size = 22, face = "bold"),
+    legend.position="bottom"#,
+    # plot.margin = unit(c(1,2,1,1),"cm")
+    # legend.margin=margin()
+  )#+ 
+# guides(fill=guide_legend(title="Size\n(X100)"))
+
+fh_fl_gsea_bplot
+```
+
+
+```{r}
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+saveRDS(fh_fl_gsea_bplot, "plots/figS26/fh_fl_gsea_bplot.RDS")
+```
+
+```{r, eval=T, fig.width= 8, fig.height=5}
+##FGSEA
+m_ranks<- mh_ml_marker_list_acc_strn_13.14[[1]] %>% 
+  rownames_to_column('gene_id')  %>%
+  arrange(desc(avg_log2FC)) %>% dplyr::select(gene_id, avg_log2FC) %>% deframe(.)
+
+m_fgseaRes <- fgsea(gene_ids_pf, stats = m_ranks, nPermSimple = 10000)
+
+m_fgseaResTidy <- m_fgseaRes %>%
+  as_tibble() %>%
+  arrange(desc(NES)) 
+
+m_fgseaResTidy %>% filter(padj < 0.05) %>% write_csv("v3_science_manuscript/tables/msc14_mh_ml_gsea.csv")
+
+
+##clusterprofiler
+gsea = clusterProfiler::GSEA(m_ranks , TERM2GENE = Pf3D7_61_gaf_F$TERM2GENE, TERM2NAME=Pf3D7_61_gaf_F$TERM2NAME, pvalueCutoff = 0.05)
+print(enrichplot::dotplot(gsea))
+
+
+```
+
+
+```{r, eval=T, fig.width= 16, fig.height=5}
+##FGSEA
+
+mh_ml_gsea_bplot <- fgseaResTidy %>% filter(padj < 0.05) %>% arrange(padj) %>% group_by(NES<0) %>% 
+  slice_head(., n = 5) %>%
+  ggplot(aes(reorder(pathway, NES), NES)) +
+  geom_col(aes(fill = size/100)) +
+  coord_flip() +
+  labs(x="GO term: Function", y="Normalized\nEnrichment\nScore",
+       # title="Hallmark pathways NES from GSEA"
+  ) + 
+  theme_classic()+
+  theme(
+    axis.text.y  = element_text(size = 26),
+    axis.text.x = element_text(size = 26),#, angle = 45
+    axis.title.y  = element_text(size = 24, face = "bold"),
+    axis.title.x = element_text(size = 24, face = "bold"),
+    # axis.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 22),
+    legend.title = element_text(size = 22, face = "bold"),
+    legend.position="bottom"#,
+    # plot.margin = unit(c(1,2,1,1),"cm")
+    # legend.margin=margin()
+  )#+ 
+# guides(fill=guide_legend(title="Size\n(X100)"))
+
+mh_ml_gsea_bplot
+```
+
+```{r}
+
+##Function to save tables in excel as sheets
+
+createWorksheet <- function(x, y){
+  wb <- createWorkbook()
+  for(i in seq_along(x)){
+    addWorksheet(wb, names(x)[i])
+    writeData(wb, sheet = names(x)[i], x[[i]])
+    saveWorkbook(wb, file = y, overwrite = TRUE)
+  }
+}
+
+```
+
+```{r}
+##!!!! NOTE - MANUSCRIPT female vs female (LE) table
+
+# createWorksheet(c(map(fh_fl_marker_list_acc_strn_lfc.25_mp1_3.13.14, ~.x %>% filter(p_val_adj<0.05)) %>% set_names('female(HE) VS female(LE) DE'),
+#                 list(fgseaResTidy %>% filter(padj < 0.05)) %>% set_names('female(HE) VS female(LE) GSEA')),
+# "../Mali/v3_science_manuscript/tables/data S11 - female vs female (LE) DE & GSEA.xlsx")
+
+```
+
+
+#### female high vs female low DE genes overlapping between samples visualization  {.tabset}
+
+##### up_in_fh_ovlp
+```{r, eval=FALSE}
+ggvenn(
+  list(msc3_fh = fh_fl_marker_list_3.13.14[[1]] %>% filter(p_val_adj < 1e-50  & avg_log2FC > 1) %>% pull(gene_id),
+       msc13_fh= fh_fl_marker_list_3.13.14[[2]] %>% filter(p_val_adj < 1e-50  & avg_log2FC > 1) %>% pull(gene_id) ,
+       msc14_fh = fh_fl_marker_list_3.13.14[[3]] %>% filter(p_val_adj < 1e-50  & avg_log2FC > 1) %>% pull(gene_id)),
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#A46868"),
+  stroke_size = 0.5, set_name_size = 4
+)
+```
+
+##### up_in_fl_ovlp
+```{r, eval=F}
+ggvenn(
+  list(msc3_fl = fh_fl_marker_list_3.13.14[[1]] %>% filter(p_val_adj < 1e-50  & avg_log2FC < -1) %>% pull(gene_id),
+       msc13_fl= fh_fl_marker_list_3.13.14[[2]] %>% filter(p_val_adj < 1e-50  & avg_log2FC < -1) %>% pull(gene_id) ,
+       msc14_fl = fh_fl_marker_list_3.13.14[[3]] %>% filter(p_val_adj < 1e-50  & avg_log2FC < -1) %>% pull(gene_id)),
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#A46868"),
+  stroke_size = 0.5, set_name_size = 4
+)
+```
+
+
+
+##### up_in_mh_ovlp
+```{r, eval=F}
+ggvenn(
+  list(msc13_mh = mh_ml_marker_list_13.14[[1]] %>% filter(p_val_adj < 1e-10  & avg_log2FC > 0.5) %>% pull(gene_id),
+       msc14_mh= mh_ml_marker_list_13.14[[2]] %>% filter(p_val_adj < 1e-10  & avg_log2FC > 0.5) %>% pull(gene_id)),
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#A46868"),
+  stroke_size = 0.5, set_name_size = 4
+)
+```
+
+##### up_in_ml_ovlp
+Only one sample with male low-expression. Need to return the deleted male low-expression for MSC14
+```{r, eval=F}
+ggvenn(
+  list(msc13_ml = mh_ml_marker_list_13.14[[1]] %>% filter(p_val_adj < 1e-10  & avg_log2FC < -0.5) %>% pull(gene_id),
+       msc14_ml= mh_ml_marker_list_13.14[[2]] %>% filter(p_val_adj < 1e-10  & avg_log2FC < -0.5) %>% pull(gene_id)),
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#A46868"),
+  stroke_size = 0.5, set_name_size = 4
+)
+```
+
+
+#### tabulate female high vs female low ovlp
+```{r}
+
+##up_in_fl_ovlp
+topfl_overlapping <- fh_fl_marker_list_3.13.14[1] %>%
+  purrr::map(. %>% 
+        filter(avg_log2FC < 0 & p_val_adj < 1e-10) %>% 
+        dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj) %>% 
+        arrange(avg_log2FC) %>% 
+        pull(gene_id) %>% 
+        str_replace(., '-', '_') %>% 
+        head(.,n=500)) %>% 
+  Reduce(base::intersect,.)
+
+##up_in_fh_ovlp
+topfh_overlapping <- fh_fl_marker_list_3.13.14[1] %>%
+  purrr::map(. %>% 
+        filter(avg_log2FC > 0 & p_val_adj < 1e-10) %>% 
+        dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj) %>% 
+        arrange(avg_log2FC) %>% 
+        pull(gene_id) %>% 
+        str_replace(., '-', '_') %>% 
+        head(.,n=500)) %>% 
+  Reduce(base::intersect,.)
+
+```
+
+```{r, eval=F}
+
+fh_fl_marker_list_3.13.14 %>%
+  purrr::map(. %>% filter(avg_log2FC > 0 & p_val_adj < 1e-10) %>% dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj) %>% arrange(avg_log2FC))
+
+```
+
+#### tabulate male high vs male low ovlp
+```{r}
+##up_in_ml_ovlp top500
+topml_overlapping <- mh_ml_marker_list_13.14 %>%
+  purrr::map(. %>% 
+        filter(avg_log2FC < 0 & p_val_adj < 1e-10) %>% 
+        dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj) %>% 
+        arrange(avg_log2FC) %>% 
+        pull(gene_id) %>% 
+        str_replace(., '-', '_') %>% 
+        head(.,n=500)) %>% 
+  Reduce(base::intersect,.)
+
+##up_in_mh_ovlp  top500
+topmh_overlapping <- mh_ml_marker_list_13.14 %>%
+  purrr::map(. %>% 
+        filter(avg_log2FC > 0 & p_val_adj < 1e-10) %>% 
+        dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj) %>% 
+        arrange(avg_log2FC) %>% 
+        pull(gene_id) %>% 
+        str_replace(., '-', '_') %>% 
+        head(.,n=500)) %>% 
+  Reduce(base::intersect,.)
+
+
+```
+
+```{r, eval=F}
+##up_in_ml_ovlp top500
+mh_ml_marker_list_13.14 %>%
+  purrr::map(. %>% filter(avg_log2FC < 0 & p_val_adj < 1e-10) %>% dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj) %>% arrange(avg_log2FC))
+
+```
+
+#### overlap between top 500 mh,ml,fh,fl above
+```{r}
+ggvenn(
+  list(topmh = topmh_overlapping,
+       topml= topml_overlapping,
+       topfh= topfh_overlapping,
+       topfl= topfl_overlapping),
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#A46868"),
+  stroke_size = 0.5, set_name_size = 4
+)
+```
+
+
+#### overlap between all sets for msc3 (up in mh, low in mh, up in fh, low in fh)
+```{r, eval=FALSE}
+ggvenn(
+  list(topmh =  mh_ml_marker_list_13.14[[1]] %>% filter(avg_log2FC > 0.5 & p_val_adj < 1e-100) %>% pull(gene_id),
+       topml =  mh_ml_marker_list_13.14[[1]] %>% filter(avg_log2FC < -0.5 & p_val_adj < 1e-100) %>% pull(gene_id),
+       topfh =  fh_fl_marker_list_3.13.14[[2]] %>% filter(avg_log2FC > 0.5 & p_val_adj < 1e-100) %>% pull(gene_id),
+       topfl =  fh_fl_marker_list_3.13.14[[2]] %>% filter(avg_log2FC < -0.5 & p_val_adj < 1e-100) %>% pull(gene_id)),
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#A46868"),
+  stroke_size = 0.5, set_name_size = 4
+)
+```
+
+#### overlap between all sets for msc14 (up in mh, low in mh, up in fh, low in fh)
+```{r, eval=FALSE}
+ggvenn(
+  list(topmh =  mh_ml_marker_list_13.14[[2]] %>% filter(avg_log2FC > 0.5 & p_val_adj < 1e-15) %>% pull(gene_id),
+       topml =  mh_ml_marker_list_13.14[[2]] %>% filter(avg_log2FC < -0.5 & p_val_adj < 1e-15) %>% pull(gene_id),
+       topfh =  fh_fl_marker_list_3.13.14[[3]] %>% filter(avg_log2FC > 0.5 & p_val_adj < 1e-15) %>% pull(gene_id),
+       topfl =  fh_fl_marker_list_3.13.14[[3]] %>% filter(avg_log2FC < -0.5 & p_val_adj < 1e-15) %>% pull(gene_id)),
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#A46868"),
+  stroke_size = 0.5, set_name_size = 4
+)
+```
+
+#### overlap between all sets for msc14 (up in mh, low in mh, up in fh, low in fh)
+```{r, eval=FALSE}
+fl_ml_overlap <- base::intersect(fh_fl_marker_list_3.13.14[[3]] %>% filter(avg_log2FC < -0.5 & p_val_adj < 1e-15) %>% pull(gene_id),
+                                 mh_ml_marker_list_13.14[[2]] %>% filter(avg_log2FC < -0.5 & p_val_adj < 1e-15) %>% pull(gene_id))
+```
+
+#### Visualize  fh_vs_fl mh_vs_ml  the markers identified above
+
+
+##### Average expression visualization {.tabset}
+
+Function 
+```{r}
+makeSetScore <- function(seur, gene.set,assay='RNA', slt = 'data') {
+  # Get mean expression of genes of interest per cell
+  gene.set <- gene.set[gene.set %in% rownames(seur) ]
+  mean.exp <- colMeans(x = as.matrix(GetAssayData(seur, slot = slt, assay = assay))[gene.set, ], na.rm = TRUE)
+  
+  # Add mean expression values in 'object@meta.data$gene.set.score'
+  if (all(names(x = mean.exp) == rownames(x = seur@meta.data))) {
+    return(mean.exp)
+  }
+}
+
+```
+
+fl_ml overlap genes
+```{r}
+
+# fl_ml_ovlp_avg_exp <- msc_qcd_anotd[1:4] %>%
+#   purrr::map(~makeSetScore(., fl_ml_overlap, assay = 'RNA') %>% 
+#         data.frame %>% 
+#         setNames('fl_ml_overlap') 
+#   )
+
+fl_ml_ovlp_avg_exp <- msc_qcd_anotd[1:4] %>%
+  purrr::map(~makeSetScore(., fh_fl_marker_list_3.13.14[[1]] %>% filter(avg_log2FC < -0.5 & p_val_adj < 1e-15) %>% pull(gene_id), assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('fl_ml_overlap') 
+  )
+
+# msc_qcd_anotd[1:4] <- list(msc_qcd_anotd[1:4], fl_ml_ovlp_avg_exp) %>%
+#   pmap(~AddMetaData(..1, ..2)) 
+
+msc_qcd_anotd[1:4] <- list(msc_qcd_anotd[1:4], fl_ml_ovlp_avg_exp) %>%
+  pmap(~AddMetaData(..1, ..2)) 
+```
+
+
+```{r, results='asis', message=FALSE}
+msc_qcd_anotd[1:4] <- purrr::map(msc_qcd_anotd[1:4], ~SetIdent(., value='stageHL'))
+msc_qcd_anotd[1:4]  %>% 
+  purrr::iwalk(.,~{
+    # create tabset for each group 
+    cat('###### ',.y,'   \n')
+    cat('Average Female (LE) Male (LE) overlap genes expression \n')
+    cat('\n')
+    print(FeaturePlot(., features = "fl_ml_overlap", dims = c(1,2), pt.size = 1.5, label = T, label.size = 5, repel = T) + 
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+ 
+            theme(axis.text=element_text(size=12), 
+                  axis.title=element_text(size=12,face="bold"), 
+                  legend.text = element_text(size=12),
+                  legend.position="bottom",
+                  legend.key.width = unit(1, "cm")
+            )+
+            coord_fixed()
+          #guides(colour = guide_colorbar(barwidth = 17))
+    )
+    # export::graph2ppt(file= paste0('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/markers/kes_asx_gam_gold/gam_', .y))
+    
+  })
+
+```
+
+```{r, fig.width = 20, fig.height = 5}
+Idents(msc_qcd_anotd[[1]]) <- 'stageHL'
+msc_qcd_anotd[[1]] %>% VlnPlot(., features = c("PF3D7-0416100", "PF3D7-1105000"), group.by = 'seurat_clusters') 
+msc_qcd_anotd[[1]] %>%FeaturePlot(., reduction = "umap", features =c("PF3D7-0216000","PF3D7-0416100", "PF3D7-1232800", "PF3D7-0219400"), pt.size = 1.2,  label = T, repel = T, label.size = 5,  cols =  c("lightgrey", "red"),ncol=4) 
+```
+
+
+```{r, fig.width = 20, fig.height = 6}
+Idents(msc_qcd_anotd[[1]]) <- 'stageHL'
+
+msc_qcd_anotd[[1]] %>% VlnPlot(., features = c("PF3D7-1234700","PF3D7-0904200","PF3D7-0715400",  "PF3D7-1430100"), group.by = 'stageHL', ncol = 5, cols = sp_colors[c('Gametocyte (developing)', 'Early trophozoite', 'Late ring','Female','Female (LE)', 'Male',  'Male (LE)', 'Unassigned')]) 
+
+vp <- msc_qcd_anotd[[1]] %>% VlnPlot(., features = c( "PF3D7-1234700","PF3D7-0904200","PF3D7-0715400", "PF3D7-1430100"), group.by = 'stageHL', ncol = 5, combine = F, cols = sp_colors[c('Gametocyte (developing)', 'Early trophozoite', 'Late ring','Female','Female (LE)', 'Male',  'Male (LE)', 'Unassigned')]) 
+
+
+##Using match to ensure correct order
+p1 <-list(vp, fh_fl_marker_list_3.13.14[[1]][match(c("PF3D7-1234700","PF3D7-0904200","PF3D7-0715400", "PF3D7-1430100"), fh_fl_marker_list_3.13.14[[1]]$gene_id), 'Gene']) %>%
+  pmap(~ ..1 +labs(title = ..2) +
+         theme(legend.position="none")+
+         xlab('Stage') +
+         theme(axis.text=element_text(size=18), 
+               # axis.title=element_text(size=24,face="bold"), 
+               axis.title.y  =element_text(size=18,face="bold"),
+               legend.text = element_text(size=34), 
+               title = element_text(size=24,face="bold"),
+               axis.text.x = element_text(angle = 90),
+               # axis.title.x = element_text('stageHL'),
+               strip.text.x = element_text(size = 24, face = "bold")))  %>% 
+  plot_grid(plotlist = .,  ncol = 4)
+
+p1
+
+
+fp <- msc_qcd_anotd[[1]] %>%FeaturePlot(., reduction = "umap", features =c("PF3D7-0715400",  "PF3D7-1234700","PF3D7-0904200","PF3D7-1430100"), pt.size = 1.2,  label = T, repel = T, label.size = 5,ncol=4, combine =F) 
+
+list(fp, fh_fl_marker_list_3.13.14[[1]][fh_fl_marker_list_3.13.14[[1]]$gene_id %in% c("PF3D7-0715400",  "PF3D7-1234700","PF3D7-0904200","PF3D7-1430100"), 'Gene']) %>%
+  pmap(~ ..1 +labs(title = ..2))  %>% plot_grid(plotlist = .,  ncol = 4)
+
+
+```
+
+## MAST DE between strains accounting for stage
+
+```{r}
+##REMEMBER TO REMOVE CLUSTERS WITH VERY FEW CELLS AND DOUBLETS SEURAT
+# msc14_v3_combi <- msc14_v3_combi[, cells_de]
+```
+
+
+```{r, message=FALSE, warning=FALSE, eval=F}
+# For performing differential expression after integration, we switch back to the original data
+
+msc_qcd_anotd[1:4] <- purrr::map(msc_qcd_anotd[1:4], ~SetIdent(., value='Strain_DN'))
+
+## NB!! Seurat documentation issue use ident.1 instead of cells.1 https://github.com/satijalab/seurat/issues/3001
+strains_marker_list <- msc_qcd_anotd[1:4] %>% purrr::map(., ~.x[,!is.na(.x@meta.data$Strain_DN)] %>% 
+                                                  FindAllMarkers(.,
+                                           assay = 'RNA',
+                                           slot = "data",
+                                           test.use = 'MAST',
+                                           latent.vars = 'stageHL'))
+
+strains_marker_list <- strains_marker_list %>%
+  purrr::map(. %>% rownames_to_column('gene_id') %>% 
+        left_join(.,Pf3D7_genes_plasmoDB, by = 'gene_id') 
+  )
+
+saveRDS(strains_marker_list, "data/processed/DB52e_star/strains_marker_list.RDS")
+# msc_qcd_anotd[2:5] <- purrr::map(msc_qcd_anotd[2:5], ~SetIdent(., value='seurat_clusters'))
+
+
+```
+
+```{r}
+##!!Need to confirm up to date status - strains_marker_list.RDS generated above and the chunk turned off to not redundantly rerun for speed. The file is then stored
+strains_marker_list <- readRDS("data/processed/DB52e_star/strains_marker_list.RDS")
+```
+
+```{r, eval=F}
+strains_marker_list %>%
+  purrr::map(. %>% dplyr::select(gene_id, Gene, cluster, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj))
+```
+
+
+Tabulate selec set of genes
+```{r, eval=F}
+
+strains_marker_list %>%
+  purrr::map(. %>% dplyr::filter(avg_log2FC >2 ) %>% dplyr::select(gene_id, Gene, cluster, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj))
+```
+
+```{r, eval=F}
+
+fh_fl_marker_list_3.13.14 %>%
+  purrr::map(. %>% dplyr::filter(avg_log2FC < 0 & pct.1 <0.5 &  pct.2 >0.3) %>% arrange(avg_log2FC) %>% dplyr::select(gene_id, Gene, avg_log2FC, pct.1, pct.2, Ka_Ks, p_val_adj))
+```
+
+#### female high vs female low DE visualization
+```{r, fig.height=6, fig.width=6}
+EnhancedVolcano(fh_fl_marker_list_3.13.14[[1]],
+                lab = fh_fl_marker_list_3.13.14[[1]]$Gene,
+                x = 'avg_log2FC',
+                y = 'p_val_adj',
+                pCutoff = 10e-32,
+                FCcutoff = 2,
+                pointSize = 3.0,
+                labSize = 4.0,
+                title = '',
+                subtitle = "",
+                titleLabSize = 0,
+                subtitleLabSize = 0,
+                legendLabels =c(expression(Log[2] ~ FC), "p-value"))
+```
+
+Filter  genes expressed in very few cells per stage
+
+```{r}
+asx_det_gns <- msc_qcd_anotd[[4]][,msc_qcd_anotd[[4]]@meta.data$stageHL %in% c('Late ring', 'Early trophozoite')]@assays$RNA@counts %>% as.matrix() %>% rowSums(.)
+
+asx_det_gns <- asx_det_gns[asx_det_gns > 100] %>% names()
+
+m_det_gn <- msc_qcd_anotd[[4]][,msc_qcd_anotd[[4]]@meta.data$stageHL %in% c('Male')]@assays$RNA@counts %>% as.matrix() %>% rowSums(.)
+
+m_det_gn <- m_det_gn[m_det_gn > 100] %>% names()
+
+fl_det_gn  <- msc_qcd_anotd[[4]][,msc_qcd_anotd[[4]]@meta.data$stageHL %in% c('Female (LE)')]@assays$RNA@counts %>% as.matrix() %>% rowSums(.)
+
+fl_det_gn <- fl_det_gn[fl_det_gn > 100] %>% names()
+
+ggvenn(list('as'=asx_det_gns, 'm' = m_det_gn, 'fl'= fl_det_gn))
+
+```
+
+
+```{r}
+asx_det_gns <- msc_qcd_anotd[[4]][,msc_qcd_anotd[[4]]@meta.data$stageHL %in% c('Late ring', 'Early trophozoite')]@assays$RNA@counts %>% as.matrix() %>% rowSums(.)
+
+asx_det_gns <- asx_det_gns[asx_det_gns > 50] %>% names()
+
+m_det_gn <- msc_qcd_anotd[[4]][,msc_qcd_anotd[[4]]@meta.data$stageHL %in% c('Male')]@assays$RNA@counts %>% as.matrix() %>% rowSums(.)
+
+m_det_gn <- m_det_gn[m_det_gn > 50] %>% names()
+
+fl_det_gn  <- msc_qcd_anotd[[4]][,msc_qcd_anotd[[4]]@meta.data$stageHL %in% c('Female (LE)')]@assays$RNA@counts %>% as.matrix() %>% rowSums(.)
+
+fl_det_gn <- fl_det_gn[fl_det_gn > 50] %>% names()
+
+ggvenn(list('as'=asx_det_gns, 'm' = m_det_gn, 'fl'= fl_det_gn))
+
+```
