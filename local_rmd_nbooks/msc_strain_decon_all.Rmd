@@ -1,0 +1,1457 @@
+---
+title: "msc_strain_decon_new"
+date: '2023-08-10'
+author: 'Jesse Rop'
+output:
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+---
+
+
+```{r, message=FALSE}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr) 
+  library(stringr)
+  library(purrr)
+  library(readr)
+  library(tibble)
+  library(ggplot2)
+  library(tidyr)
+  library(cowplot)
+  library(pheatmap)
+  library(rmarkdown)
+  library('vcfR')
+  library(conflicted)
+  library(RColorBrewer)
+  library(MetBrewer)
+  library(ComplexHeatmap)
+  library(SeqArray)
+  library(ggrepel)
+  library(ggvenn)
+  library(magick)
+  library(svglite)
+  library(plotly)
+  library(gganimate)
+  library(av)
+  
+  conflict_prefer("select", "dplyr")
+  conflict_prefer("count", "dplyr")
+  conflict_prefer("filter", "dplyr")
+  conflict_prefer("rename", "dplyr")
+  conflict_prefer("saveRDS", "base")
+})
+
+```
+
+
+# MSC parasites strain deconvolution and VCF visualization 
+
+## Variable declarations
+
+```{r}
+##good coours 
+# "#6eb5ff", "#f4a261"
+##Strain cluster colours
+strain_cols <- c(met.brewer(name = 'Austria')[c(1,7, 4,5,6)], 'light gray')
+
+# strain_cols_n <-c("#910000", "#f20000", "#007c71", "#00f2dd", "#c39a00", "#ffd94d", "#7570B3","#708db3", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","#a40000" , "#00b7a7", "#ffcd12", 'black', 'lavender', 'lightgray', 'grey')
+# names(strain_cols_n) <- c('SC2', 'SC1','SC4',  'SC3', 'SC6',  'SC5', 'SC7', 'S2_S3', 'S3_S1', 'S1_p_i','S1_b', 'S2_b', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'SC1_3i','Negative',  'Less5')
+# "#aeaa61" "#c695c9"
+
+strain_cols_n <-c("#910000", "#ff1a8d", "#007c71", "#0ea300", "#00deca", "#9a96c7", "#5d57a4", "#a8875b","#708db3", "#c39a00", "#ffd94d", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","thistle","#a40000" , "#00b7a7", "#e7f1f9", 'black', '#050301','grey')
+#, 'lavender', 'lightgray', 'grey'
+names(strain_cols_n) <- c('SC2', 'SC1','SC5',  'SC4', 'SC3',  'SC6', 'SC7', 'SC8', 'SC9', 'SC10', 'SC11', 'SC12', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'SC1_3i','Negative', 'Lab', 'Less5', 'PoorQC', NA)
+
+strain_cols_fh <-c("#910000", "#007c71", "#5d57a4", "lightgray")
+#, 'lavender', 'lightgray', 'grey'
+names(strain_cols_fh) <- c('SC2', 'SC5', 'SC7', 'Other')
+
+strain_cols_nl <-c("#910000", "#f20000", "#007c71", "#00f2dd", "#c39a00", "#ffd94d", "#7570B3","#708db3", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#thistle","#a40000" , "#00b7a7", "#ffcd12", 'black', 'lavender', 'lightgray', 'grey')
+names(strain_cols_nl) <- c('SC1b', 'SC1a', 'SC2b',  'SC2a', 'SC3b',  'SC3a', 'S2_S1', 'S2_S3', 'S3_S1', 'S1_pa','S1_b', 'S2_b', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'S1_3i','Negative',  'Less5')
+
+sp_colors <- c('Early ring'='#D1EC9F',
+                     'Late ring'='#78C679',
+                     'Early trophozoite'='#FEEEAA',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                     'Gametocyte (developing)'='thistle',
+                     'Gametocyte (female)'='#551A8B',
+                     'Gametocyte (male)'='mediumpurple',
+               'Unassigned'='red', 
+               'Not assigned'='#D6CFC7',
+               'Female (LE)'='#208cf7',
+               'Female (HE)'='#551A8B',
+               'Male (LE)'='#a894d1',
+               'Male (HE)'='mediumpurple',
+               'Failed QC' = 'grey',
+               'Gametocyte (committed)' = '#C399A2', 
+               'Gametocyte (developing)' = '#66444C', 
+               'Gametocyte (branching)' = '#66444C', 
+               'Gametocyte (early female)' = '#749E89', 
+               'Gametocyte (early male)' = '#7D87B2', 
+               'Gametocyte (late female)' = '#4E6D58', 
+               'Gametocyte (late male)' = '#41507B',
+                   NULL = 'lightgrey'
+)
+
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle',
+                   'NA' = 'lightgrey',
+                   'stgQC_fail' = 'lightgrey'
+)
+
+c_stg_shapes = c('Asexual' = 16 , 'Male' = 3,  'Female' = 6)
+c_stg_cols= c('Asexual' = "#D7B7C7", 'Male' = "#C4CAA4", 'Female'="#6289A9", 'Developing' = "#C9F6E1", 'Unassigned'="lightgrey")
+
+stg_refnd_lvls = c("Early ring", "Late ring", "Early trophozoite", "Late trophozoite", "Early schizont", "Late schizont", "Gametocyte (committed)", "Gametocyte (developing)", "Gametocyte (branching)", "Female (HE)", "Female (LE)", "Gametocyte (female)", "Gametocyte (early female)", "Gametocyte (late female)", "Gametocyte (male)", "Male (HE)", "Male (LE)", "Gametocyte (early male)", "Gametocyte (late male)", "Unassigned", "Failed qc", "Not assigned", "Atlas", "stgQC_fail")
+
+trip = 'Mali'
+algn_nm = 'minmap'
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/')
+```
+
+
+
+## Genotype clustering for MSC
+
+Read in clusters.tsv files with assignment of cells to strains and PCA plots metrics
+
+Transfer clusters.tsv files with assignment of cells to strains and PCA plots metrics for the best K from farm to my local Mac
+```{r}
+##Copy souporcell files for the optimum clusters
+
+##Sample ID
+# sample_name_nms <- c("msc33", "msc48","msc49", "msc55", "msc60", "msc66") %>% sort()
+sample_name_nms <- c("msc1", "msc3","msc13","msc14","msc1272") %>% str_sort(numeric = T)
+algn_nms = c('minmap', 'hsat')
+
+sample_name_nms_al <- rep(sample_name_nms, 2)
+algn_nms_al <- rep(algn_nms, each= length(sample_name_nms))
+
+sm_aln_nms_al <- paste(rep(sample_name_nms, 2), rep(algn_nms, each= length(sample_name_nms)), sep ='_')
+# rep(algn_nms, each= length(sample_name_nms)
+
+
+## number of optimum clusters to investigate per sample
+# opt_clusters_nms <- list("msc33" = c(7, 8, 9),"msc48" = c(4,5,6),"msc49" = c(3,4,5),"msc55" = c(4,5,6),"msc60" = c(3,4,5), "msc66" = c(8,9,10))
+opt_clusters_nms <- list("msc1" = c(3:9),"msc3" = c(2:3),"msc13" = c(2:6),"msc14" = c(4:10),"msc1272" = c(2:7))
+
+opt_clusters_len <- map(opt_clusters_nms, length)
+
+##Samples
+sample_name <- map2(sample_name_nms, opt_clusters_len[sample_name_nms], ~rep(.x, each = .y))
+
+opt_clusters <- unlist(flatten(opt_clusters_nms[sample_name_nms]))
+
+sample_name <- unlist(flatten(sample_name))
+
+## sorted donor_opt_cluster names
+sorted_names <- paste0(sample_name, "_", opt_clusters)
+
+## sorted factoring alignment
+sorted_names_al <-paste0(sample_name, "_",rep(algn_nms,each=length(sample_name)),"_", opt_clusters)
+
+
+iter = opt_clusters_len
+```
+
+
+```{r, eval=F}
+##Copy souporcell files for the optimum clusters
+
+for (i in 1:length(sample_name)) {
+  for (a in 1:length(algn_nms)) {
+    
+    ## Create new directories
+    system(
+      paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/', sample_name[i],'/soupc/',algn_nms[a],'/k', opt_clusters[i])
+    )
+    
+    ##Transfers
+    ##souporcell genotyping files
+    system(
+      paste0('rsync -av --include="cluster_genotypes.vcf" --include="clusters.tsv" --exclude="*" jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/',trip,'/data/processed/DB52e_star/', sample_name[i],'/soupc/',algn_nms[a],'/k' , opt_clusters[i], '/* /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/', sample_name[i],'/soupc/',algn_nms[a],'/k', opt_clusters[i])
+      )
+  }  
+}
+
+
+```
+
+## Log likelihood Elbow plots visualisations for all MSCs
+```{r, message=FALSE, eval=FALSE}
+## copy from farm
+map2(rep(sample_name_nms, 2), rep(algn_nms, each= length(sample_name_nms)), ~system(paste0('rsync -av jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/',trip,'/data/processed/DB52e_star/', .x,'/soupc/',.y,'/clusters_log_likelihoods.txt /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/', .x,'/soupc/',.y,'/')))
+
+```
+
+
+```{r, message=FALSE}
+## Read in log likelihoods for estimation of number of clusters from elbow plots
+clusters_log_likelihoods_lst = map2(rep(sample_name_nms, 2), rep(algn_nms, each= length(sample_name_nms)), ~read_table(paste0('data/processed/DB52e_star/', .x,'/soupc/',.y,'/clusters_log_likelihoods.txt'), col_names = c('No_of_clusters', 'td1','td2','td3', 'td4','log_likelihood')) %>% select(-(starts_with("td"))) %>% mutate(across(No_of_clusters, ~str_remove_all(., "out_dir_k|/clusters.err:best")))) %>% set_names(paste(rep(sample_name_nms, 2), rep(algn_nms, each= length(sample_name_nms)), sep ='_'))
+```
+
+
+
+```{r} 
+map(clusters_log_likelihoods_lst, ~.x %>%
+  mutate(across(c('No_of_clusters'), ~factor(as.numeric(.)))) %>%
+  ggplot(., aes(x = No_of_clusters, y = log_likelihood)) +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  # facet_grid(rows = .~id)+
+  theme(axis.text=element_text(size=10),
+        axis.title=element_text(size=16,face="bold"),
+        legend.text = element_text(size=15),
+        title = element_text(size=16,face="bold"),
+        strip.text.x = element_text(size = 18, face = "bold")))
+```
+
+
+
+Transfer clusters.tsv files with assignment of cells to strains and PCA plots metrics for the best K from farm to my local Mac
+```{r}
+##Copy souporcell files for the optimum clusters
+
+```
+
+
+Read all the souporcell files for all the iterations. May be excessive but since we have the memory and cpu and we may need to use the files downstream then why not.
+```{r, results='hide'}
+# list.files("data/processed/DB52e_star/", pattern = "clusters.tsv", full.names = T, recursive = T, include.dirs = T)
+list.files("data/processed/DB52e_star/", pattern = "clusters.tsv", full.names = T, recursive = T, include.dirs = T)%>% set_names(nm = (str_remove_all(.,'data/processed/DB52e_star//|soupc/|k|/clusters.tsv') %>% str_replace_all(., '/', '_'))) 
+```
+
+minimap2
+```{r}
+soupc_all <- list.files("data/processed/DB52e_star/", pattern = "clusters.tsv", full.names = T, recursive = T, include.dirs = T)%>% set_names(nm = (str_remove_all(.,'data/processed/DB52e_star//|soupc/mi.*k|/clusters.tsv') %>% str_replace(., '/', '_'))) %>% .[sorted_names]%>%
+  map_df(read_delim, delim = "\t", col_types = 'cccddd', .id = "sample_k") 
+
+
+```
+
+hisat2
+```{r}
+soupc_all <- list.files("data/processed/DB52e_star/", pattern = "clusters.tsv", full.names = T, recursive = T, include.dirs = T)%>%
+  set_names(nm = (str_remove_all(.,'data/processed/DB52e_star//|soupc/h.*k|/k|/clusters.tsv') %>% str_replace_all(., '/', '_'))) %>% .[sorted_names] %>%
+  map_df(read_delim, delim = "\t", col_types = 'cccddd', .id = "sample_k") %>% mutate(across(sample_k, ~str_remove(., "_hsat")))
+
+
+```
+
+combi
+```{r}
+soupc_all_al <- list.files("data/processed/DB52e_star/", pattern = "clusters.tsv", full.names = T, recursive = T, include.dirs = T)%>% set_names(nm = (str_remove_all(.,'data/processed/DB52e_star//|soupc/|k|/clusters.tsv') %>% str_replace_all(., '/', '_')))  %>% .[sorted_names_al]%>%
+  map_df(read_delim, delim = "\t", col_types = 'cccddd', .id = "sample_k") 
+
+
+```
+
+
+Select appropriate k  (number of strains) for each MSC sample
+```{r}
+# knee_k <- c()
+```
+
+
+Select only information from clusters.tsv for the best k as determined from the log likelihood plot for each MSC sample
+
+```{r}
+# soupo_kselect <- soupc_all %>% 
+# filter(sample_k %in% knee_k) %>%
+# dplyr::select(sample_k, barcode, status, assignment) %>% 
+#   dplyr::mutate("Strain" = case_when(status == "doublet" ~ "Doublet",
+#                                      status == "unassigned" ~ "Negative",
+#                                      TRUE ~ paste0('Strain ', as.character(assignment)))
+#                 ) 
+
+##Change Strain to G0,G1,G2 for publication figures and enhanced readability
+# soupo_kselect <- soupc_all %>% 
+soupo_kselect_al <- soupc_all_al %>% 
+  # filter(sample_k %in% knee_k) %>%
+  dplyr::select(sample_k, barcode, status, assignment) %>% 
+  dplyr::mutate("Strain" = case_when(status == "doublet" ~ "Doublet",
+                                     status == "unassigned" ~ "Negative",
+                                     assignment == "0" ~ "SC1",
+                                     assignment == "1" ~ "SC2",
+                                     assignment == "2" ~ "SC3",
+                                     assignment == "3" ~ "SC4",
+                                     assignment == "4" ~ "SC5",
+                                     assignment == "5" ~ "SC6",
+                                     assignment == "6" ~ "SC7",
+                                     assignment == "7" ~ "SC8",
+                                     assignment == "8" ~ "SC9",
+                                     assignment == "9" ~ "SC10",
+                                     assignment == "10" ~ "SC11",
+                                     assignment == "11" ~ "SC12",
+                                     assignment == "12" ~ "SC13",
+                                     assignment == "13" ~ "SC14",
+                                     assignment == "14" ~ "SC15",
+                                     assignment == "15" ~ "SC16")
+  ) 
+```
+
+
+```{r}
+# Compare HISAT and MINIMAP
+soupo_kselect_al_cor <- soupo_kselect_al %>%
+  separate_wider_delim(cols = "sample_k", delim = "_", names = c("sample", "aligner", "k")) %>% 
+  unite(col = "sample_k", c('sample','k'), remove = FALSE)  %>%
+  select("sample_k","aligner","barcode","Strain") %>% 
+  dplyr::group_split(sample_k) %>%
+  purrr::set_names(purrr::map_chr(., ~.x$sample_k[1])) %>%
+  .[sorted_names]
+  
+map(soupo_kselect_al_cor, ~pivot_wider(.x, names_from = aligner, values_from = Strain) %>% count(minmap, hsat) %>% pivot_wider(names_from = hsat, values_from = n) %>% column_to_rownames('minmap') %>% as.matrix() %>% ComplexHeatmap::pheatmap(., cluster_rows = F, cluster_cols = F, display_numbers = T))
+  
+
+```
+
+
+Split the information for each sample into different labels and put into a list named appropriately
+```{r}
+soupo_kselect_list <- soupo_kselect_al %>%
+  filter(str_detect(sample_k, algn_nm)) %>%
+  mutate(across(sample_k, ~str_remove(.,paste0("_", algn_nm)))) %>%
+  dplyr::group_split(sample_k) %>%
+  purrr::set_names(purrr::map_chr(., ~.x$sample_k[1])) %>%
+  map(. %>% column_to_rownames(., "barcode") %>% dplyr::select(Strain))
+
+
+soupo_kselect_list <- soupo_kselect_list[as.character(sorted_names)]
+
+
+##Get strain levels for samples with more than one strain and mutate Strain column to reflect this
+# strain_levels <- map(soupo_kselect_list[2:8], ~.x %>% filter(str_detect(Strain, 'Strain')) %>% pull(Strain) %>% unique() %>% sort() %>% c(.,"Doublet","Negative"))
+strain_levels <- map(soupo_kselect_list, ~.x %>% dplyr::filter(str_detect(Strain, '^SC')) %>% pull(Strain) %>% unique() %>% sort() %>% c(.,"Doublet","Negative"))
+
+soupo_kselect_list <- map2(soupo_kselect_list,strain_levels, ~.x %>% mutate(across(Strain, ~factor(., levels = .y)))) 
+```
+
+```{r}
+# soupo_kselect_list <- soupo_kselect_list[c(1:32, 33, 36, 39, 40, 42:55)]
+# sortd_names_new <- names(soupo_kselect_list)
+```
+
+```{r, message=FALSE}
+##Copy souporcell files for the optimum clusters investigation on igv - all except negative
+
+soupo_kmerge <- map(sample_name_nms, ~{
+soupo_kselect_list[str_detect(names(soupo_kselect_list), paste0(.x, "_"))] %>% 
+  imap(., ~{
+    nms = .y
+    .x %>% rename_with(~paste0(.,'_', nms), everything()) %>% rownames_to_column('bcode')
+        }) %>% 
+    purrr::reduce(., left_join, by = 'bcode')
+  }) %>% 
+  set_names(sample_name_nms)
+
+```
+
+```{r}
+##Transfer stage labels and other metadata from farm
+# list.files("data/processed/DB52e_star/", pattern = "msc_filt_w_dblts_scmap_metadata.RDS", full.names = T, recursive = T, include.dirs = T) %>% 
+#   set_names(nm = (str_remove_all(.,'data/processed/DB52e_star//|_5736.*|/msc_filt_w_dblts_scmap_metadata.RDS') %>% str_replace(., '/', '_'))) 
+
+all_msc_anotd_mdata <- readRDS("data/processed/DB52e_star/all_msc_anotd_mdata.RDS")
+msc_mdata <- map(all_msc_anotd_mdata, ~.x %>% rownames_to_column('bcode'))
+# msc_mdata <- map2(all_msc_anotd_mdata, msc_qcd_anotd_mdata, ~.x  %>% select(StagePrelim) %>% rownames_to_column('bcode') %>% left_join(., .y %>% rownames_to_column('bcode'), by='bcode'))
+```
+
+```{r}
+##Transfer stage labels and other metadata from farm
+# mdata_all <- list.files("data/processed/DB52e_star/", pattern = "msc_filt_w_dblts_scmap_metadata.RDS", full.names = T, recursive = T, include.dirs = T) %>% 
+#   set_names(nm = (str_remove_all(.,'data/processed/DB52e_star//|_5736.*|/msc_filt_w_dblts_scmap_metadata.RDS') %>% str_replace(., '/', '_'))) %>%
+mdata_all <- msc_mdata %>% .[sample_name_nms] %>%
+  map(. %>% 
+        # readRDS() %>% 
+        # dplyr::rename('stageHL' = stageHR_msc14) %>%
+        mutate(#across(stageHL, ~str_replace_all(.,c('high count' = 'HE', 'low count' = 'LE'))),
+               ##Collapse asexuals and gams and number of cells per coarse group & add the number per xluster as a column in metadata
+               stage_afm = case_when(str_detect(StagePrelim, 'ring|troph') ~ 'Asexual', 
+                                     str_detect(StagePrelim, '\\(male') ~ 'Male', 
+                                     str_detect(StagePrelim, 'female') ~ 'Female', 
+                                     str_detect(StagePrelim, 'developing') ~ 'Developing',
+                                     T ~StagePrelim),
+               stage_ag = case_when(str_detect(StagePrelim, 'ring|troph') ~ 'Asexual', 
+                                    str_detect(StagePrelim, 'ale|developing') ~ 'Gametocyte',
+                                     T ~StagePrelim)) 
+      ) 
+
+```
+
+```{r}
+##read in stage labels 
+
+soupo_seu_kmerge <- list(soupo_kmerge[sample_name_nms], mdata_all[sample_name_nms]) %>%
+  pmap(~{
+    # ..1 %>% left_join(., ..2 %>% rownames_to_column('bcode'), by = 'bcode')  
+    ..1 %>% left_join(., ..2 , by = 'bcode')  
+  })
+
+```
+
+
+```{r, fig.width = 16, fig.height = 4, message=FALSE, warning=FALSE}
+iter=2
+
+ss_bar_plt <-list( rep(soupo_seu_kmerge, times = opt_clusters_len), rep(names(soupo_seu_kmerge), times = opt_clusters_len), opt_clusters_nms[names(soupo_seu_kmerge)] %>% flatten() %>% map(.,max))  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1 %>%
+      mutate(across(stage_afm, ~droplevels(factor(., levels=c('Asexual', 'Female', 'Male', 'Developing', 'Unassigned'))))) %>%
+      dplyr::count(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_afm, .drop = FALSE) 
+  
+  ##get stage_ag labels and counts to add to the Strain_max+stage_afm counts generated above
+  stage_ag_cnt <- ..1 %>% 
+    dplyr::select(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_ag, stage_afm) %>% 
+    add_count(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_ag, name = 'stage_ag_n') %>% 
+    distinct(pick(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_afm), .keep_all = T) %>% 
+    left_join(a_tbl, ., by =c(paste('Strain',..2,..3, sep='_'), 'stage_afm')) %>% 
+    rename(c('Stage'= stage_afm, 'Counts' =n, 'Strain' = !!rlang::sym(paste('Strain',..2,..3, sep='_'))))  
+  
+  print(stage_ag_cnt)
+  
+    b_plt <- stage_ag_cnt %>%
+      # ggplot(., aes(x = Stage, y = Counts, fill = Stage, color=stage_ag_n<30)) +
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 7, show.legend = F, fontface ='bold', colour='black')+
+      scale_fill_manual(values = c_stg_cols) + #'Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6"
+      # scale_color_manual(values = c('FALSE' = "white", 'TRUE' = "blue")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 14)) +
+  facet_wrap( Strain ~ ., nrow = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')
+      )+ 
+      guides(color = F)
+    print(b_plt)
+    
+    return(b_plt)
+})
+
+##!!!!!!!NB!!!! SUNILS STAGES
+```
+
+```{r, fig.width = 16, fig.height = 4, message=FALSE, warning=FALSE}
+iter=2
+
+ss_bar_plt <-list( rep(soupo_seu_kmerge, times = opt_clusters_len), rep(names(soupo_seu_kmerge), times = opt_clusters_len), opt_clusters_nms[names(soupo_seu_kmerge)] %>% flatten() %>% map(.,max))  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1 %>%
+      mutate(across(stage_afm, ~factor(., levels=c('Asexual', 'Female', 'Male', 'Developing', 'Unassigned')))) %>%
+      dplyr::count(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_afm, .drop = FALSE) 
+  
+  ##get stage_ag labels and counts to add to the Strain_max+stage_afm counts generated above
+  stage_ag_cnt <- ..1 %>% 
+    dplyr::select(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_ag, stage_afm) %>% 
+    add_count(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_ag, name = 'stage_ag_n') %>% 
+    distinct(pick(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_afm), .keep_all = T) %>% 
+    left_join(a_tbl, ., by =c(paste('Strain',..2,..3, sep='_'), 'stage_afm')) %>% 
+    rename(c('Stage'= stage_afm, 'Counts' =n, 'Strain' = !!rlang::sym(paste('Strain',..2,..3, sep='_'))))  
+  
+  print(stage_ag_cnt)
+  
+    b_plt <- stage_ag_cnt %>%
+      # ggplot(., aes(x = Stage, y = Counts, fill = Stage, color=stage_ag_n<30)) +
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 7, show.legend = F, fontface ='bold', colour='black')+
+      scale_fill_manual(values = c_stg_cols) + #'Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6"
+      # scale_color_manual(values = c('FALSE' = "white", 'TRUE' = "blue")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 14)) +
+  facet_wrap( Strain ~ ., nrow = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')
+      )+ 
+      guides(color = F)
+    print(b_plt)
+    return(b_plt)
+})
+
+##!!!!!!!NB!!!! SUNILS STAGES
+```
+
+
+## msc3 strains = sc1(includes 3) & sc2
+## msc13 strains = sc1 & sc2(incudes sc3)
+## msc1 sc1 from msc1_4 splits into sc1 n sc3 in msc_5 and sc1_6 in msc_6
+
+
+
+```{r, message=FALSE}
+##Coalesce the genotypes and get a consensus genotype taking labels for highest resolution K
+##VARIABLE
+## !!!NB!!!!!When trialing out different souporcell Ks use Strain_qc_cutoff > 20 but once decided use Strain_qc_cutoff > 0 the optimum K 
+
+# Strain_qc_cutoff=20
+Strain_qc_cutoff=0
+
+optimum_k = c(5,2,2,8,2) %>% set_names(sample_name_nms)
+
+opt_narrow_clusters_nms <- list("msc1" = c(4:7),"msc3" = c(2:3),"msc13" = c(2:5),"msc14" = c(5:8),"msc1272" = c(2:3))
+
+
+
+strn_c_mdata <- list(soupo_seu_kmerge, names(soupo_seu_kmerge), opt_clusters_nms[names(soupo_seu_kmerge)] %>% map(.,max), optimum_k, imap(opt_narrow_clusters_nms, ~paste0(.y, '_', .x))) %>%
+  pmap(~{
+    ..1 %>%
+      unite(col = 'Strn_c', starts_with("Strain_msc"), sep='_', remove = F) %>% 
+      add_count(Strn_c) %>% 
+      mutate(
+        'Strain_max_qc' = case_when( 
+          !str_detect(Strn_c, 'Negative|Doublet') & n>Strain_qc_cutoff ~ !!rlang::sym(paste('Strain',..2,..3, sep='_')), 
+          T ~ 'PoorQC'),
+        'Strain_qc' = case_when(
+          !str_detect(!!rlang::sym(paste('Strain',..2,..4, sep='_')), 'Negative|Doublet') & n>Strain_qc_cutoff ~ !!rlang::sym(paste('Strain',..2,..4, sep='_')), 
+          T ~ 'PoorQC'),
+        'Strain_DN' = !!rlang::sym(paste('Strain',..2,..4, sep='_')),
+        'dbt_neg_all' = case_when(
+          if_all(c(paste0('Strain_', ..5)), ~ .== "Doublet") ~ "DoubletAll",
+          if_all(c(paste0('Strain_', ..5)), ~ .== "Negative") ~ "NegativeAll",
+          if_all(c(paste0('Strain_', ..5)), ~ .== "Doublet" | .== "Negative") ~ "DbtNegMix", 
+          T ~ 'LikelySinglet')
+        )%>%
+        dplyr::add_count(Strain_qc, stage_ag, name = 'cluster_ag_n') %>% 
+        dplyr::add_count(Strain_qc, stage_afm, name = 'cluster_afm_n')
+  })
+
+
+
+```
+
+
+
+```{r} 
+
+map2(clusters_log_likelihoods_lst[str_detect(names(clusters_log_likelihoods_lst), "hsat")] , optimum_k, ~.x %>%
+  mutate(opt_k = .y) %>% head
+)
+```
+
+
+```{r} 
+optimum_kv2 <- c(4,3,3,7,3) %>% set_names(sample_name_nms)
+optimum_kv3 <- c(6,3,3,6,2) %>% set_names(sample_name_nms)
+
+
+sc_ll_knee_p_all <- map2(clusters_log_likelihoods_lst[str_detect(names(clusters_log_likelihoods_lst), "hsat")] %>% .[1:4] , optimum_k[1:4], ~.x %>% mutate(opt_k = .y)) %>%
+  bind_rows(., .id = 'donor') %>% 
+  mutate(across(donor, ~factor(str_remove(., '_hsat'), levels = names(optimum_k[1:4])))) %>%
+    mutate(across(c('No_of_clusters'), ~factor(as.numeric(.)))) %>%
+    ggplot(., aes(x = No_of_clusters, y = log_likelihood/100000)) + 
+    geom_point() +
+    geom_line(aes(group = 1)) + 
+    geom_vline(aes(xintercept = optimum_k), data.frame(optimum_k[1:4]) %>% set_names("optimum_k") %>% rownames_to_column('donor') %>% mutate(across(donor, ~factor(., levels = sample_name_nms[1:4])))) +
+    scale_x_discrete(breaks = function(x){x[c(F, T)]}) +
+    facet_wrap(donor~., nrow = 1)+
+    theme_classic() +
+    theme(axis.title = element_text(size=20, face = 'bold'),
+          axis.text.y = element_text(size=18),
+          axis.text.x = element_text(size=16),
+          strip.text =element_text(size=24,face="bold", colour = 'black'),
+          panel.border=element_rect(colour="black",fill='transparent')) +
+    labs(y= "Log likelihood ( X1e5)", x = "Number of strains")
+
+sc_ll_knee_p_all
+saveRDS(sc_ll_knee_p_all, "plots/fig_QC_s1/sc_ll_knee_p_all.RDS")
+```
+
+
+Plot log likelihood
+
+```{r, fig.width=7.5, fig.height= 5.5}
+  
+sc_ll_knee_p_lst <- list(clusters_log_likelihoods_lst[str_detect(names(clusters_log_likelihoods_lst), "hsat")], optimum_k, optimum_kv2, optimum_kv3) %>%
+  pmap(., ~{
+      ..1 %>% 
+  mutate(across(c('No_of_clusters'), ~factor(as.numeric(.)))) %>%
+  ggplot(., aes(x = No_of_clusters, y = log_likelihood/100000)) + 
+  geom_point() +
+  scale_x_discrete(breaks = function(x){x[c(F, T)]}) +
+  geom_vline(xintercept=..2)+
+  geom_vline(xintercept=..3)+
+  geom_vline(xintercept=..4)+
+  geom_line(aes(group = 1)) + 
+  theme_classic() +
+  theme(text = element_text(size=35)) +
+  labs(y= "Log likelihood (X1e5)", x = "Number of strains")
+    })
+
+sc_ll_knee_p_lst
+saveRDS(sc_ll_knee_p_lst, "plots/fig_QC_s1/sc_ll_knee_p_lst.RDS")
+```
+
+
+```{r}
+## visualize top clusters
+list(strn_c_mdata, sample_name_nms, optimum_k)  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% dplyr::count(Strn_c, Strain_qc, !!rlang::sym(paste0("Strain", "_", ..2, "_", ..3))) %>% arrange(desc(n))
+})
+```
+
+
+```{r}
+## Doublets confirmed removal round 2
+## visualize top clusters
+list(strn_c_mdata, sample_name_nms, optimum_k)  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% filter(if_all(starts_with('Strain_msc'), ~ .== "Doublet" | .== "Negative")) %>% dplyr::count(Strn_c, dbt_neg_all, !!rlang::sym(paste0("Strain", "_", ..2, "_", ..3))) 
+})
+```
+
+```{r}
+## visualize top clusters
+list(strn_c_mdata, sample_name_nms, optimum_k)  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% dplyr::count(Strn_c, Strain_qc, !!rlang::sym(paste0("Strain", "_", ..2, "_", ..3))) %>% arrange(desc(n))
+})
+```
+
+```{r}
+## visualize top clusters
+list(strn_c_mdata, sample_name_nms, optimum_k)  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% dplyr::count(Strn_c, Strain_qc, !!rlang::sym(paste0("Strain", "_", ..2, "_", ..3))) %>% arrange(desc(n))
+})
+```
+
+
+### PCA calculation
+```{r}
+soupo_PC_mtx <- soupc_all %>% 
+  dplyr::select(-c(status, assignment, log_prob_singleton, log_prob_doublet)) %>% 
+  dplyr::group_split(sample_k) %>%
+  purrr::set_names(purrr::map_chr(., ~.x$sample_k[1])) %>%
+  map(. %>% column_to_rownames(., "barcode") %>%
+        dplyr::select(where(~!all(is.na(.)))) %>%
+        dplyr::select(-sample_k) %>%
+        mutate(across(where(is.numeric), ~ (. / rowSums(across(where(is.numeric)))))) %>%
+        as.matrix() %>%
+        t())
+
+
+
+soupo_PC_mtx <- soupo_PC_mtx[as.character(sorted_names)]
+```
+
+
+
+```{r}
+##Calculate PCA
+soupo_PCA <- soupo_PC_mtx %>% 
+  map(. %>% prcomp(.))
+```
+
+
+Calculate proportion of variance explained by PC1 and PC2
+```{r}
+# Assuming your data is stored in a matrix called 'data'
+# Extract the standard deviations of the principal components
+# pc_standard_deviations <- soupo_PCA[[9]]$sdev
+# 
+# #PC1 variance explained
+# (pc_standard_deviations[1] ^ 2) / sum(pc_standard_deviations^2)
+# 
+# #PC2 variance explained
+# (pc_standard_deviations[2] ^ 2) / sum(pc_standard_deviations^2)
+```
+
+
+```{r}
+## Save PCA
+saveRDS(soupo_PCA, "data/processed/DB52e_star/soupo_PCA_m21.RDS")
+```
+
+
+
+```{r}
+## visualize top clusters
+list(strn_c_mdata)  %>% 
+  purrr::pmap(.,~{
+  # ..1 %>% dplyr::count(Strain_qc, StageMCA) %>% arrange(desc(n))
+  ..1 %>% dplyr::count(Strain_qc, Stage_V3) %>% arrange(desc(n))
+  # ..1 %>% dplyr::count(stageHL) %>% arrange(desc(n))
+  # ..1 %>% dplyr::count(stage_lab) %>% arrange(desc(n))
+})
+```
+
+
+Add stage labels collapsing asexuals and gams and number of cells per coarse group
+```{r}
+##Add the number per xluster as a column in metadata
+
+map(strn_c_mdata, . %>% 
+      filter(cluster_ag_n < 20) %>%
+      dplyr::count(Strain_qc, stage_ag, stage_afm) 
+)
+ 
+```
+
+```{r}
+##Add the number per xluster as a column in metadata
+map(strn_c_mdata, . %>% 
+      filter(cluster_ag_n > 20) %>%
+      dplyr::count(Strain_qc, stage_ag, stage_afm) 
+)
+
+```
+
+```{r, fig.width = 12, fig.height = 4, message=FALSE, warning=FALSE}
+
+
+ss_bar_plt <-list( strn_c_mdata)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1 %>%
+      mutate(across(stage_afm, ~factor(., levels=c('Asexual', 'Female', 'Male', 'Developing', 'Unassigned')))) %>%
+      dplyr::count(Strain_qc, stage_afm, .drop = FALSE) 
+  
+  ##get stage_ag labels and counts to add to the Strain_qc+stage_afm counts generated above
+  stage_ag_cnt <- ..1 %>% 
+    dplyr::select(Strain_qc, stage_ag, stage_afm) %>% 
+    add_count(Strain_qc, stage_ag, name = 'stage_ag_n') %>% 
+    distinct(pick(Strain_qc, stage_afm), .keep_all = T) %>% 
+    left_join(a_tbl, ., by =c('Strain_qc', 'stage_afm')) %>% 
+    rename(c('Stage'= stage_afm, 'Counts' =n, 'Strain' = Strain_qc))  
+  
+  print(stage_ag_cnt)
+  
+    b_plt <- stage_ag_cnt %>%
+      # ggplot(., aes(x = Stage, y = Counts, fill = Stage, color=stage_ag_n<30)) +
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 7, show.legend = F, fontface ='bold', colour='black')+
+      scale_fill_manual(values = c_stg_cols) + #'Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6"
+      # scale_color_manual(values = c('FALSE' = "white", 'TRUE' = "blue")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 14)) +
+  facet_wrap( Strain ~ ., nrow = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')
+      )+ 
+      guides(color = F)
+    print(b_plt)
+    return(b_plt)
+})
+
+
+```
+
+
+```{r, fig.width = 12, fig.height = 4, message=FALSE, warning=FALSE}
+
+
+ss_bar_plt <-list( strn_c_mdata)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1 %>%
+      mutate(across(stage_afm, ~factor(., levels=c('Asexual', 'Female', 'Male', 'Developing', 'Unassigned')))) %>%
+      dplyr::count(Strain_DN, stage_afm, .drop = FALSE) 
+  
+  ##get stage_ag labels and counts to add to the Strain_DN+stage_afm counts generated above
+  stage_ag_cnt <- ..1 %>% 
+    dplyr::select(Strain_DN, stage_ag, stage_afm) %>% 
+    add_count(Strain_DN, stage_ag, name = 'stage_ag_n') %>% 
+    distinct(pick(Strain_DN, stage_afm), .keep_all = T) %>% 
+    left_join(a_tbl, ., by =c('Strain_DN', 'stage_afm')) %>% 
+    rename(c('Stage'= stage_afm, 'Counts' =n, 'Strain' = Strain_DN))  
+  
+  print(stage_ag_cnt)
+  
+    b_plt <- stage_ag_cnt %>%
+      # ggplot(., aes(x = Stage, y = Counts, fill = Stage, color=stage_ag_n<30)) +
+      ggplot(., aes(x = Stage, y = Counts, fill = Stage)) +
+      geom_col(position = position_dodge2()) + #width=0.4, position = position_dodge(width=0.5) 
+      geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 7, show.legend = F, fontface ='bold', colour='black')+
+      scale_fill_manual(values = c_stg_cols) + #'Asexual' = "#FFE5B4", 'Male' = "#BFD7B5", 'Female'="#8ab6d6"
+      # scale_color_manual(values = c('FALSE' = "white", 'TRUE' = "blue")) +
+  geom_tile(aes(x = Stage, y = -10, fill = Stage, height = 14)) +
+  facet_wrap( Strain ~ ., nrow = 1) +
+      scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+      scale_x_discrete(expand = expansion(add = c(1, 1))) +
+      theme_classic() +
+  labs( y = 'Counts')+
+      theme(
+        axis.text.y  = element_text(size = 22),
+        axis.title.y  = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = "bold"),
+        legend.position="bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=20,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')
+      )+ 
+      guides(color = F)
+    print(b_plt)
+    return(b_plt)
+})
+
+
+```
+
+
+```{r}
+
+# specify that we will perform downstream analysis on the corrected data note that the
+# original unmodified data still resides in the 'RNA' assay
+
+# msc_m21_qcd_anotd_strn <- readRDS("data/processed/msc_m21_qcd_anotd_strn.RDS")
+# 
+# list(msc_m21_qcd_anotd_strn, strn_c_mdata) %>%
+#   pmap(.,~{
+#     ..1@meta.data %>% rownames_to_column('bcode') %>% full_join(., ..2, by='bcode') %>% dplyr::count( Strain_qc, strain,stage_ag.y) 
+#   })
+
+```
+
+
+```{r}
+## visualize top clusters
+list(strn_c_mdata, sample_name_nms, optimum_k)  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% dplyr::count(Strn_c, Strain_qc, !!rlang::sym(paste0("Strain", "_", ..2, "_", ..3))) %>% arrange(desc(n))
+})
+```
+
+###msc3 = SC1+SC3
+###ms13 = SC2+SC3
+```{r}
+##Add the number per xluster as a column in metadata
+
+map(strn_c_mdata, . %>% 
+      # filter(cluster_ag_n >= 100) %>%
+      dplyr::count(Strain_DN, stage_ag, stage_afm) 
+)
+
+```
+
+```{r}
+
+##Save strain + new metadata as RDS
+strn_c_mdata <- map(strn_c_mdata, 
+    . %>% 
+      mutate(across(stage_afm, ~ifelse(is.na(.), 'Low_n', .)),
+             across(stage_ag, ~ifelse(is.na(.), 'Low_n', .))) %>%
+      # add_count(Strain_qc, stage_afm, name = 'strain_afm_n')%>% 
+      # add_count(Strain_qc, stage_ag, name = 'strain_ag_n')%>%
+      add_count(Strain_DN, stage_afm, name = 'strain_afm_n')%>% 
+      add_count(Strain_DN, stage_ag, name = 'strain_ag_n')%>%
+      # mutate('strain' = case_when(strain_afm_n>=15 ~ Strain_qc))%>%
+      # mutate('strain' = case_when(strain_afm_n>=15 ~ Strain_DN))%>%
+      mutate('strain' = case_when(strain_afm_n>5 ~ Strain_DN))
+    ) 
+
+
+```
+
+```{r}
+##Add the number per xluster as a column in metadata
+
+map(strn_c_mdata, . %>% 
+      # filter(cluster_ag_n >= 100) %>%
+      dplyr::count(strain,Strain_DN, stage_ag, stage_afm) 
+)
+
+```
+
+```{r}
+##Clusters with more than 100
+
+map(strn_c_mdata, . %>% 
+      filter(cluster_ag_n >= 100) %>%
+      dplyr::count(Strain_qc, stage_ag) %>% 
+      filter(Strain_qc != 'PoorQC') %>%
+      unite(col = 'cluster',Strain_qc, stage_ag, sep = '_') %>%
+      pull(cluster) %>%
+      str_remove_all(., 'ametocyte|sexual')
+) %>% imap(., ~paste(.x, .y, sep='_')) %>%
+  saveRDS(., "data/processed/DB52e_star/ss_ag_gtype_clusters_100_m21.RDS")
+
+```
+
+```{r}
+##Save strain + new metadata as RDS
+map(strn_c_mdata, 
+    . %>% 
+      # dplyr::select("bcode", "Strn_c", starts_with("Strain"),"stage_afm", "stage_ag", "cluster_ag_n", "cluster_afm_n", "stageHL", "strain_afm_n", "strain")) %>%
+      dplyr::select("bcode", "Strn_c", starts_with("Strain"),"stage_afm", "stage_ag", "cluster_ag_n", "cluster_afm_n", "strain_afm_n", "strain", "dbt_neg_all")) %>%
+  saveRDS("data/processed/DB52e_star/strn_c_new_mdata_m21.RDS")
+
+
+```
+
+
+Write out strain_qcd/strain + stage_ag/stage_afm barcodes to farm for pseudobulk genotyping
+
+```{r, eval=T}
+## DOUBLETS WRITTEN INTO THE SAME FOLDER IN MSC_PP.rmd - SHOULD BE COMBINED INTO ONE NOTEBOOK
+# sample_ids = map2(sample_name_nms, source_irods_nms, ~paste0(.x, '_', .y))
+
+for (s in names(strn_c_mdata)) {
+  for (str_q in c('strain')){
+    # ss_qcd_ano <- map(strn_c_mdata[s], ~.x %>% dplyr::select(str_q) %>% mutate(across(c(str_q), ~droplevels(factor(.)))) %>% rownames_to_column('bcode')%>% rename('str'=str_q) %>% split(f = ~ str, drop = T))
+    ss_qcd_ano <- map(strn_c_mdata[s], ~.x %>% dplyr::select(str_q, bcode) %>% mutate(across(c(str_q), ~droplevels(factor(.)))) %>% rename('str'=str_q) %>% split(f = ~ str, drop = T))
+    names(ss_qcd_ano[[1]]) <- names(ss_qcd_ano[[1]]) %>% str_replace(., '\\.', '_')
+    print(names(ss_qcd_ano[[1]]))
+    
+    system(paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',str_q,'_k',optimum_k[s],'/'))
+    system(paste0('rm /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',str_q,'_k',optimum_k[s],'/*'))
+
+    imap(ss_qcd_ano[[1]], ~write(.x$bcode, paste0('data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',str_q,'_k',optimum_k[s],'/',.y, '.tsv')))
+     
+    system(
+      paste0('rsync -av --delete /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',str_q,'_k',optimum_k[s], ' jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/')
+    )
+    
+    ##Add doublets
+    # system(
+    #   paste0('rsync -av /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/Doublet.tsv ', '/Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',str_q,'_k',optimum_k[s],'/')
+    # )
+    
+    
+    for(stg_c in c('stage_afm', 'stage_ag')){
+      ss_qcd_ano <- map(strn_c_mdata[s], ~.x %>% dplyr::select(str_q, stg_c, bcode) %>% mutate(across(c(str_q, stg_c), ~droplevels(factor(.)))) %>% rename('stg'=stg_c, 'str'=str_q) %>% split(f = ~ str+stg, drop = T))
+      names(ss_qcd_ano[[1]]) <- names(ss_qcd_ano[[1]]) %>% str_replace(., '\\.', '_')
+      print(names(ss_qcd_ano[[1]]))
+      
+      system(paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',stg_c,'_',str_q,'_k',optimum_k[s],'/'))
+      system(paste0('rm /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',stg_c,'_',str_q,'_k',optimum_k[s],'/*'))
+
+      imap(ss_qcd_ano[[1]], ~write(.x$bcode, paste0('data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',stg_c,'_',str_q,'_k',optimum_k[s],'/',.y, '.tsv')))
+      
+      system(
+        paste0('rsync -av --delete /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',stg_c,'_',str_q,'_k',optimum_k[s], ' jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/')
+      )
+      
+       ##Add doublets
+    #   system(
+    #   paste0('rsync -av /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/Doublet.tsv ', '/Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm,'/',stg_c,'_',str_q,'_k',optimum_k[s],'/')
+    # )
+      
+    }
+  }
+    system(paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip, '/data/processed/DB52e_star/',s,'/bcodes/',algn_nm, '/bcodes_no_dbt' ))
+    
+    strn_c_mdata[[s]] %>% filter(dbt_neg_all == "LikelySinglet") %>% pull(bcode) %>% write(., paste0('data/processed/DB52e_star/', s, '/bcodes/',algn_nm, '/bcodes_no_dbt/barcodes.tsv'))
+  
+    ##Add barcodes after removing of doublets concordant across ks
+    system(
+      paste0('rsync -av /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm, '/bcodes_no_dbt/barcodes.tsv ', 'jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/',trip,'/data/processed/DB52e_star/',s,'/bcodes/',algn_nm, '/bcodes_no_dbt/')
+    )
+}
+```
+END OF STRAIN FIRST PASS ANALYSIS
+
+#####START##!!! NEW NOTEBOOK AFTER ASSIGNMENT OF LE/HE - PUTTING CART BEFORE HORSE HERE - can be sorted by assigning LE HE stages at the preprocessing and qc pp script
+
+
+```{r}
+##Transfer stage labels and other metadata from farm
+# list.files("data/processed/DB52e_star/", pattern = "msc_filt_w_dblts_scmap_metadata.RDS", full.names = T, recursive = T, include.dirs = T) %>% 
+#   set_names(nm = (str_remove_all(.,'data/processed/DB52e_star//|_5736.*|/msc_filt_w_dblts_scmap_metadata.RDS') %>% str_replace(., '/', '_'))) 
+
+msc_qcd_anotd_mdata <- readRDS("data/processed/DB52e_star/msc_qcd_anotd_mdata.RDS")
+msc_mdata_qc <- map2(msc_qcd_anotd_mdata[sample_name_nms], strn_c_mdata[sample_name_nms], ~.x  %>% select(stageHL) %>% rownames_to_column('bcode') %>% left_join(., .y, by='bcode'))
+```
+
+```{r}
+##Transfer stage labels and other metadata from farm
+# mdata_all <- list.files("data/processed/DB52e_star/", pattern = "msc_filt_w_dblts_scmap_metadata.RDS", full.names = T, recursive = T, include.dirs = T) %>% 
+#   set_names(nm = (str_remove_all(.,'data/processed/DB52e_star//|_5736.*|/msc_filt_w_dblts_scmap_metadata.RDS') %>% str_replace(., '/', '_'))) %>%
+mdata_all_qc <- msc_mdata_qc %>% .[sample_name_nms] %>%
+  map(. %>% 
+        # readRDS() %>% 
+        # dplyr::rename('stageHL' = stageHR_msc14) %>%
+        mutate(across(stageHL, ~str_replace_all(.,c('high count' = 'HE', 'low count' = 'LE'))))
+  )
+
+```
+
+```{r}
+##read in stage labels 
+
+# soupo_seu_kmerge <- list(soupo_kmerge[sample_name_nms], mdata_all[sample_name_nms]) %>%
+#   pmap(~{
+#     # ..1 %>% left_join(., ..2 %>% rownames_to_column('bcode'), by = 'bcode')  
+#     ..1 %>% left_join(., ..2 , by = 'bcode')  
+#   })
+
+```
+
+
+```{r, fig.width = 16, fig.height = 4, message=FALSE, warning=FALSE}
+iter=2
+
+ss_bar_plt <-list( rep(mdata_all_qc, times = opt_clusters_len), rep(names(mdata_all_qc), times = opt_clusters_len), opt_clusters_nms[names(mdata_all_qc)] %>% flatten() %>% map(.,max))  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1 %>%
+      mutate(across(stage_afm, ~droplevels(factor(., levels=c('Asexual', 'Female', 'Male', 'Developing', 'Unassigned'))))) %>%
+      dplyr::count(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stage_afm, .drop = FALSE) 
+  
+  ##get stage_ag labels and counts to add to the Strain_max+stage_afm counts generated above
+ 
+    c_plt <- ..1 %>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%
+      dplyr::count(!!rlang::sym(paste('Strain',..2,..3, sep='_')), stageHL, .drop = FALSE)  %>%
+      rename(c('Counts' =n, 'Strain' = !!rlang::sym(paste('Strain',..2,..3, sep='_')))) %>%
+      ggplot(., aes(x = stageHL, y = Counts/100, fill = stageHL)) +
+ geom_col() +
+  geom_tile(aes(x = stageHL, y = -(10/100), fill = stageHL, height = 7/100)) +
+  scale_fill_manual(values =  sp_fld_colors, guide = guide_legend( direction = "horizontal"  ))+
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+  geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 4.8, show.legend = F, fontface = 'bold')+
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.2))) +
+  scale_x_discrete(expand = expansion(add = c(1.2, 0.8))) +
+  facet_grid(.~Strain) +
+  theme_classic() +
+  labs( y = 'Counts (X100)')+
+      theme(
+        axis.text.y  = element_text(size = 15),
+        axis.title.y  = element_text(size = 16, face = "bold"),
+        # axis.title.x = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=18,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+        # legend.margin=margin(t = 0, unit='cm')
+      ) +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+    print(c_plt)
+})
+
+##!!!!!!!NB!!!! SUNILS STAGES
+```
+
+
+```{r}
+list(soupo_PCA, rep(mdata_all_qc, times = opt_clusters_len), names(soupo_PCA)) %>%
+  pmap(~{..1$rotation %>% 
+     as.data.frame() %>%
+     rownames_to_column('bcode') %>% 
+      left_join(..2, by = 'bcode') %>%
+     ggplot(., aes(x=PC1, y=PC3, color = Strain_qc, shape = stageHL)) + 
+      scale_color_manual(values = strain_cols_n)+
+     geom_point(size=2) +
+    labs(title = ..3) +
+      theme_classic()
+      })
+
+```
+
+
+```{r}
+## visualize top clusters
+list(mdata_all_qc)  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% 
+      ggplot(aes(x= Strain_qc , y = nFeature_RNA, color = stageHL)) +
+      geom_boxplot()
+      
+})
+```
+
+
+```{r}
+# list(soupo_PCA, rep(strn_c_mdata, times = opt_clusters_len), names(soupo_PCA)) %>%
+list(soupo_PCA, rep(mdata_all_qc, times = opt_clusters_len), names(soupo_PCA)) %>%
+  pmap(~{..1$rotation %>% 
+     as.data.frame() %>%
+     rownames_to_column('bcode') %>% left_join(..2, by = 'bcode') %>%
+      # ggplot(., aes(x=PC1, y=PC3, color = Stage_scmap_msc14)) +
+     ggplot(., aes(x=PC1, y=PC3, color = stageHL)) + 
+      scale_color_manual(values = sp_fld_colors) +
+     geom_point(size=2)+
+    labs(title = ..3) +
+      theme_classic()
+    })
+
+```
+
+
+```{r, fig.width = 12, fig.height = 4.5, message=FALSE, warning=FALSE}
+
+
+stg_strn_distb_bar<-list( mdata_all_qc)  %>% 
+  purrr::pmap(.,~{
+  a_tbl <- ..1 %>%
+      mutate(across(stageHL, ~droplevels(factor(., levels = stg_refnd_lvls))))  %>%
+      dplyr::count(Strain_DN, stageHL, .drop = FALSE)  %>%
+      rename(c('Stage' = stageHL, 'Counts' =n, 'Strain' = Strain_DN))
+  # 
+  a_tbl %>%
+      print.data.frame()
+  
+    a_tbl %>%
+      ggplot(., aes(x = Stage, y = Counts/100, fill = Stage)) +
+ geom_col() +
+  geom_tile(aes(x = Stage, y = -(10/100), fill = Stage, height = 7/100)) +
+  scale_fill_manual(values =  sp_fld_colors, guide = guide_legend( direction = "horizontal"  ))+
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+  geom_text(aes(label=Counts), hjust=0.5, vjust= -0.3, position = position_dodge(width = .9), size = 4.8, show.legend = F, fontface = 'bold')+
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.2))) +
+  scale_x_discrete(expand = expansion(add = c(1.2, 0.8))) +
+  facet_grid(.~Strain) +
+  theme_classic() +
+  labs( y = 'Counts (X100)')+
+      theme(
+        axis.text.y  = element_text(size = 15),
+        axis.title.y  = element_text(size = 16, face = "bold"),
+        # axis.title.x = element_text(size = 22, face = "bold"),
+        axis.title.x = element_blank(),
+        # axis.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.position="bottom",
+        # plot.margin = unit(c(1,2,1,1),"cm")
+        # legend.margin=margin()
+        axis.text.x = element_blank(),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.4), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=18,face="bold", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent')#,
+        # legend.margin=margin(t = 0, unit='cm')
+      ) +
+    guides(fill = guide_legend( nrow = 1, title.position = "top"))
+    # guides(fill = guide_legend( nrow = 2))
+    # b_plt
+})
+
+stg_strn_distb_bar
+
+```
+
+
+#####END##!!! NEW NOTEBOOK AFTER ASSIGNMENT OF LE/HE - PUTTING CART BEFORE HORSE HERE
+
+```{r, results='asis'}
+# , fig.width=9.5
+
+list( soupo_PCA, strn_c_mdata)  %>% 
+  purrr::pmap(.,~{
+    # create tabset for each group 
+    cat('####', ..3,'   \n')
+    a=..1$rotation %>% 
+      as.data.frame() %>%
+      rownames_to_column('bcode') %>% 
+      left_join(..2, by = 'bcode') %>%
+      # filter(!!rlang::sym(..4) != 'Doublet' & !!rlang::sym(..4) != 'Negative') %>%
+      group_by(!!rlang::sym(..4), stage_ag) %>% 
+      add_count(name='strn_ag_n') %>%
+      # filter(strn_ag_n > 20) %>%
+      ungroup() %>%
+      mutate(across(!!rlang::sym(..4), ~str_replace_all(.,c('G1'='SC6','G2'='SC3','G3'='SC4', 'G4'='SC1','G5'='SC8','G6'='SC2','G7'='SC5','G8'='SC7')  ))) %>%
+      ggplot(., aes(x=PC1, y=PC2, color = !!rlang::sym(..4))) + 
+      geom_point(size=2) +
+      scale_color_manual(values = strain_cols_n) +
+      labs(color = 'Strain')+
+      theme_void()+
+      theme(#axis.text=element_text(size=18), 
+            axis.text=element_blank(), 
+            #axis.title=element_text(size=18,face="bold"), 
+            axis.title=element_blank(),
+            legend.text = element_text(size=22), 
+            legend.title = element_text(size=22,face="bold")) + 
+      guides(color = guide_legend(override.aes = list(size = 3.5))) 
+    
+    print(a)
+    cat('\n')
+    cat("\n")
+  })
+
+```
+
+
+Write the stage and strain annotations for tagging souporcell bam files to allow visualization in igv
+```{r, eval=FALSE}
+# strain_cc_nms <- c('Strain_k4_cc', 'Strain_k6_cc', 'Strain_k4_s2_cc', 'Strain_k4_s3_cc', 'Strain_k6_cln_cc', 'Strain_k7_cln_cc', 'Strain_k3_asex_cc', 'Strain_k4_asex_cc', 'Strain_k5_asex_cc', 'Strain_k3_gam_cc', 'Strain_k4_gam_cc', 'Strain_k5_gam_cc', 'Strain_k3_asx_v3_b_cc', 'Strain_k4_asx_v3_b_cc', 'Strain_k6_asx_v3_b_cc', 'Strain_k3_asx_m14_b_cc', 'Strain_k4_asx_m14_b_cc', 'Strain_k6_asx_m14_b_cc', 'Strain_k3_asx_m14_b_mlg_cc', 'Strain_k3_asx_lnt_m14_b_cc', 'Strain_k3_asx_m14_b_v3_ubq_cc')
+
+strain_bam_lbls <- str_to_lower(str_remove(strain_cc_nms, '_cc'))
+
+for (i in strain_bam_lbls) {
+  for(j in c('lr_iso', 'sr_illum')){
+    system(paste0('mkdir -p /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/msc14/5736STDY11771546_DB52e_star/cln_subset_bam/', i, '_bam/' ,j))
+  }
+}
+
+dedup_code <- read_delim('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/',trip,'/data/processed/msc14/5736STDY11771546_DB52e_star/dedup.info.mapped.csv', delim = '\t', col_names = F)
+
+list(strain_bam_lbls, strain_cc_nms)  %>% 
+  purrr::pmap(.,~{
+    
+    strn_stg <- soupo_kselect_list[[4]] %>% 
+      dplyr::select(!!rlang::sym(..2)) %>% 
+      filter(!is.na(!!rlang::sym(..2))) %>% 
+      rownames_to_column('bcode') %>% 
+      left_join(., msc14[[1]]@meta.data %>% 
+                  dplyr::select(stageHL) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>% 
+      dplyr::rename(c('stage' = stageHL) )
+    
+    ##write barcodes and annotation for short read illumina
+    strn_stg %>%
+      rename_at(..2, ~str_to_lower(str_remove(.,'_cc'))) %>%
+      write_csv(paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/',trip,'/data/processed/msc14/5736STDY11771546_DB52e_star/cln_subset_bam/",..1,"_bam/sr_illum/",..1,"_labs.csv"))
+    
+    
+    ##write barcodes and annotation for long read isoseq
+    strn_stg %>% 
+      mutate(across(bcode, ~str_remove(.,'-1'))) %>% 
+      left_join(., dedup_code, by = c('bcode' = 'X5'), multiple = "all") %>% 
+      dplyr::select(X1, stage, !!rlang::sym(..2)) %>% 
+      dplyr::rename( 'bcode' = X1) %>%
+      rename_at(..2, ~str_to_lower(str_remove(.,'_cc'))) %>%
+      write_csv(paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/',trip,'/data/processed/msc14/5736STDY11771546_DB52e_star/cln_subset_bam/",..1,"_bam/lr_iso/",..1,"_labs.csv"))
+    
+  }
+  )
+
+```
+
+
+```{r, eval=F}
+##transfer cell/molecule annotation to farm for tagging
+
+# #FARM#make directories in farm using a loop
+# # get the directory path sections to create then paste to farm
+# paste0(strain_bam_lbls,'_bam','/sr_illum')
+# paste0(strain_bam_lbls,'_bam','/lr_iso')
+# 
+# ##copy loop to farm in relevant parent directory
+# for i in "strain_k4_bam/sr_illum"      "strain_k6_bam/sr_illum"      "strain_k4_s2_bam/sr_illum"   "strain_k4_s3_bam/sr_illum"   "strain_k6_cln_bam/sr_illum" "strain_k3_asex_bam/sr_illum" "strain_k4_asex_bam/sr_illum" "strain_k5_asex_bam/sr_illum" "strain_k3_gam_bam/sr_illum"  "strain_k4_gam_bam/sr_illum" "strain_k5_gam_bam/sr_illum"; do mkdir -p $i; done
+
+
+for (i in strain_bam_lbls) {
+  for(j in c('lr_iso', 'sr_illum')){
+  system(paste0('rsync -av /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/',trip,'/data/processed/msc14/5736STDY11771546_DB52e_star/cln_subset_bam/',i,'_bam/',j,'/',i,'_labs.csv  jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/',trip,'/data/processed/msc14/5736STDY11771546_DB52e_star/cln_subset_bam/',i,'_bam/',j,'/'
+  ))
+  }
+}
+
+```
+
+
+```{r}
+# strain_cc_nms <- c('Strain_k4_cc', 'Strain_k6_cc', 'Strain_k4_s2_cc', 'Strain_k4_s3_cc', 'Strain_k6_cln_cc', 'Strain_k3_asex_cc', 'Strain_k4_asex_cc', 'Strain_k5_asex_cc', 'Strain_k3_gam_cc', 'Strain_k4_gam_cc', 'Strain_k5_gam_cc')
+
+list( soupo_kmerge, strain_cc_nms)  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% rownames_to_column('bcode') %>% 
+      left_join(., msc14[[1]]@meta.data %>% 
+                  dplyr::select(stageHL) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      dplyr::count(!!rlang::sym(..2), stageHL) %>%
+      print.data.frame()
+})
+```
+```{r}
+# strain_cc_nms <- c('Strain_k4_cc', 'Strain_k6_cc', 'Strain_k4_s2_cc', 'Strain_k4_s3_cc', 'Strain_k6_cln_cc', 'Strain_k3_asex_cc', 'Strain_k4_asex_cc', 'Strain_k5_asex_cc', 'Strain_k3_gam_cc', 'Strain_k4_gam_cc', 'Strain_k5_gam_cc')
+
+list( soupo_kmerge, str_remove(strain_cc_nms, '_cc'))  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% rownames_to_column('bcode') %>% 
+      left_join(., msc14[[1]]@meta.data %>% 
+                  dplyr::select(stageHL) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      dplyr::count(!!rlang::sym(..2), stageHL) %>%
+      print.data.frame()
+})
+```
+
+```{r}
+# strain_cc_nms <- c('Strain_k4_cc', 'Strain_k6_cc', 'Strain_k4_s2_cc', 'Strain_k4_s3_cc', 'Strain_k6_cln_cc', 'Strain_k3_asex_cc', 'Strain_k4_asex_cc', 'Strain_k5_asex_cc', 'Strain_k3_gam_cc', 'Strain_k4_gam_cc', 'Strain_k5_gam_cc')
+
+list( soupo_kmerge,  str_remove(strain_cc_nms, '_cc'))  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% rownames_to_column('bcode') %>% 
+      left_join(., msc14[[1]]@meta.data %>% 
+                  dplyr::select(stage_afm) %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+      dplyr::count(!!rlang::sym(..2), stage_afm) %>%
+      print.data.frame()
+})
+```
+
+
+
+```{r, fig.height=4, fig.width=12}
+# strain_cc_nms <- c('Strain_k4_cc', 'Strain_k6_cc', 'Strain_k4_s2_cc', 'Strain_k4_s3_cc', 'Strain_k6_cln_cc', 'Strain_k3_asex_cc', 'Strain_k4_asex_cc', 'Strain_k5_asex_cc', 'Strain_k3_gam_cc', 'Strain_k4_gam_cc', 'Strain_k5_gam_cc')
+
+list( soupo_kmerge, strain_cc_nms[11])  %>% 
+  purrr::pmap(.,~{
+  plt_tb <- ..1 %>% rownames_to_column('bcode') %>% 
+      left_join(., msc14[[1]]@meta.data %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+    filter(!is.na(stageHL)) %>% 
+    # filter(!is.na(stageHL) & !!rlang::sym(..2) != 'Doublet') %>% 
+    ## 2 NEGATIVES FILTERED OUT
+    filter(!is.na(!!rlang::sym(..2))) %>% 
+      mutate(across(!!rlang::sym(..2), ~str_replace_all(., c('G1'='SC6','G2'='SC3','G3'='SC4', 'G4'='SC1','G5'='SC8','G6'='SC2','G7'='SC5','G8'='SC7') ))) 
+      
+      print(plt_tb %>% filter(is.na(!!rlang::sym(..2))))
+      
+    plt_tb %>%
+      mutate(across(stageHL, ~droplevels(factor(str_replace(., ' ', '\n'), levels = str_replace(stg_refnd_lvls, ' ', '\n'))))) %>%
+      ggplot(., aes(colour = !!rlang::sym(..2), y = nFeature_RNA, x = stageHL )) +
+      scale_color_manual(values = strain_cols_n)+
+      geom_boxplot(alpha = 0.5, position = position_dodge(width = 1)) +
+        geom_point(size = 0.7, position = position_dodge(width = 1))+ 
+      labs(color = 'Strain', y = 'Gene count', x = 'Stage') +
+  theme_classic()+
+  theme(axis.text = element_text(size = 20),
+        axis.title = element_text(size = 22, face = 'bold'),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = 'bold')) 
+              
+})
+
+```
+
+
+
+```{r, fig.height=4, fig.width=12}
+# strain_cc_nms <- c('Strain_k4_cc', 'Strain_k6_cc', 'Strain_k4_s2_cc', 'Strain_k4_s3_cc', 'Strain_k6_cln_cc', 'Strain_k3_asex_cc', 'Strain_k4_asex_cc', 'Strain_k5_asex_cc', 'Strain_k3_gam_cc', 'Strain_k4_gam_cc', 'Strain_k5_gam_cc')
+
+list(soupo_kmerge, str_remove(strain_cc_nms[4], '_cc')) %>%
+  purrr::pmap(.,~{
+  plt_tb <- ..1 %>% rownames_to_column('bcode') %>% 
+      left_join(., msc14[[1]]@meta.data %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>%
+    filter(!is.na(stageHL)) %>% 
+    # filter(!is.na(stageHL) & !!rlang::sym(..2) != 'Doublet') %>% 
+    mutate(across(!!rlang::sym(..2), ~str_replace_all(., c('G1'='SC6','G2'='SC3','G3'='SC4', 'G4'='SC1','G5'='SC8','G6'='SC2','G7'='SC5','G8'='SC7') ))) 
+      
+      # print(table(is.na(plt_tb$stageHL)))
+      
+    plt_tb %>%
+      mutate(across(stageHL, ~droplevels(factor(str_replace(., ' ', '\n'), levels = str_replace(stg_refnd_lvls, ' ', '\n'))))) %>%
+      mutate(across(sim_lab1, as.numeric)) %>%
+      ggplot(., aes(colour = !!rlang::sym(..2), y = nFeature_RNA, x = stageHL )) +
+      scale_color_manual(values = strain_cols_n)+
+      geom_boxplot(alpha = 0.5, position = position_dodge(width = 1)) +
+        geom_point(size = 0.7, position = position_dodge(width = 1))+ 
+      labs(color = 'Strain', y = 'Gene count', x = 'Stage') +
+  theme_classic()+
+  theme(axis.text = element_text(size = 20),
+        axis.title = element_text(size = 22, face = 'bold'),
+        legend.text = element_text(size = 22),
+        legend.title = element_text(size = 22, face = 'bold')) 
+              
+})
+```
+
+
+```{r, fig.height=10, fig.width=16}
+# strain_cc_nms <- c('Strain_k4_cc', 'Strain_k6_cc', 'Strain_k4_s2_cc', 'Strain_k4_s3_cc', 'Strain_k6_cln_cc', 'Strain_k3_asex_cc', 'Strain_k4_asex_cc', 'Strain_k5_asex_cc', 'Strain_k3_gam_cc', 'Strain_k4_gam_cc', 'Strain_k5_gam_cc')
+
+list( soupo_kmerge, strain_cc_nms[11])  %>% 
+  purrr::pmap(.,~{
+  ..1 %>% rownames_to_column('bcode') %>% 
+      left_join(., msc14[[1]]@meta.data %>% 
+                  rownames_to_column('bcode'), 
+                by = 'bcode') %>% 
+  dplyr::select(starts_with('prob'), 'stageHL', ..2) %>%
+  pivot_longer(cols = starts_with('prob'), names_to = 'Machine learning predictions', values_to = 'probabilities') %>% 
+  mutate(across(`Machine learning predictions`, ~str_replace_all(., c('prob_' = '', '\\.$'=')', '_\\.'= ' (', '\\.'=' ', '_'=' '))))%>% 
+  mutate(across(`Machine learning predictions`, ~str_to_sentence(str_replace_all(., c('Gametocytes'='Gametocyte', 'comitted' = 'committed'))))) %>% 
+  mutate(across(`Machine learning predictions`, ~droplevels(factor(., stg_refnd_lvls))))%>% 
+  ggplot(., aes(y = probabilities, x = `Machine learning predictions`, fill = `Machine learning predictions`)) +
+  geom_boxplot() +
+  geom_point(aes(group=`Machine learning predictions`), size = 0.7, position = position_jitterdodge())+
+  # geom_tile(aes(x = `Machine learning predictions`, y = -0.05, fill = `Machine learning predictions`, height = 0.06)) +
+  # scale_fill_manual(values =  sp_colors, name = "MCA stage", guide = guide_legend( direction = "horizontal", 
+                                                                                   #title.position = "top" 
+  # ))+
+  # facet_grid2(.~stageHL, strip = strip_themed(background_x = elem_list_rect(fill = sp_fld_colors)))+
+      theme(axis.text.x=element_text(angle=45))+
+  facet_grid(rows = vars(!!rlang::sym(..2)), cols =  vars(stageHL))
+              
+})
+```
+
+!!!!!NEED TO DECIDE ON WHERE BEST TO PUT THIS - THERES A SIMILAR CODE IN THE msc_annotation script FROM THE ORIGINAL 1ST ITERATION SOUPORCELL ASSIGNMENTS. - THIS IS THE 2nd ITERATION
+!!!!!NEED NEW SCRIPT DOWNSTREAM OF THIS AND msc_annotation.rmd for DEEP STRAIN INVESTIGATION
+#### Strain barcodes
+Writing out barcodes for the strain information for resouporcell deu and plotting
