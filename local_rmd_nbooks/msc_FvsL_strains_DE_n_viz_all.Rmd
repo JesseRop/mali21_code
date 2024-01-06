@@ -1,0 +1,3684 @@
+---
+title: "MSC DE field VS lab strain VS strain DE and visualizations"
+date: '2023-08-10'
+author: 'Jesse Rop'
+output: 
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr) 
+  library(stringr)
+  library(purrr)
+  library(readr)
+  library(tibble)
+  library(ggplot2)
+  library(tidyr)
+  library(cowplot)
+  library(SeuratData)
+  library(SeuratDisk)
+  library(pheatmap)
+  library(plotly)
+  library(rmarkdown)
+  library(RColorBrewer)
+  library(MAST)
+  library(EnhancedVolcano)
+  # library(org.Pf.plasmo.db)
+  library(clusterProfiler) ##github installation newest version https://github.com/YuLab-SMU/clusterProfiler/issues/434#issuecomment-1048633162 remotes::install_github(c("YuLab-SMU/DOSE", "YuLab-SMU/clusterProfiler", "YuLab-SMU/enrichplot" ))
+  library(Platypus)
+  library(ggvenn)
+  library(tradeSeq)
+  library(MetBrewer)
+  library(ComplexHeatmap)
+  library(fgsea)
+  library(msigdbr)
+  library(slingshot)
+  library(enrichplot)
+  library(chromoMap)
+  library(pdftools)
+  library(SCpubr)
+  library(GGally)
+  library(circlize)
+  library(readxl)
+  library("ggVennDiagram")
+  library(UpSetR)
+  library(ComplexUpset)
+  library(openxlsx)
+  library(ggpubr)
+  # library(ggpairs)
+  library(conflicted)
+  library(ggforce)
+  conflict_prefer("map", "purrr")
+  conflict_prefer("filter", "dplyr")
+  conflict_prefer("rename", "dplyr")
+  conflicts_prefer(SingleCellExperiment::colData)
+})
+```
+
+# DE within MSC14 field parasites and DE on MSC14 VS MCA V3 parasites
+
+## Variable declarations, read in input files and exploratory visualizations
+
+```{r setup}
+##Set working directory
+knitr::opts_knit$set(root.dir = '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali')
+```
+
+```{r}
+##Assign colour variables for the different plots
+
+
+
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle'
+)
+
+##Field colours
+fvl_cols <- c('Field' ='#aea677',
+              'Lab' = "#e7f1f9") #"#ffe48d"
+
+strain_cols_n <-c("#910000", "#ff1a8d", "#007c71", "#0ea300", "#00deca", "#9a96c7", "#5d57a4", "#a8875b", "#ffd18d", "#b4d2ff", "#cdb8c5", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","thistle","#a40000" , "#00b7a7", "#e7f1f9", 'black', 'grey')
+#, 'lavender', 'lightgray', 'grey'
+names(strain_cols_n) <- c('SC2', 'SC1','SC5',  'SC4', 'SC3',  'SC6', 'SC7', 'SC8', '7G8', 'NF54','NF54_A', 'S2_b', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'SC1_3i','Negative', 'Lab', 'Less5', NA)
+
+#00BFFF n #E0115F -- Good blue colour to use somewhere
+
+##Strain colours
+# dset_cols <- c('Lab' ="#a9cee8",
+dset_cols <- c('Lab' ="#e7f1f9",
+               'Field' = "#aea677") # selected as mix of strain colours https://artincontext.org/color-mixer/
+
+# strain_cols <- c(met.brewer(name = 'Austria')[c(1,7, 4,6)], 'light gray')
+# # names(strain_cols) = c('Strain 0', 'Strain 1', 'Strain 2', 'Doublet', 'Negative')
+# names(strain_cols) = c('G1', 'G2', 'G3', 'Doublet', 'Negative')
+
+strain_dset_lvls = c( 'SC1', 'SC2','SC3',  'SC4', 'SC5',  'SC6', 'SC7', 'SC8', 'NF54', '7G8', 'NF54_A', 'Lab', 'Doublet')
+m_stgs <- c('asx', 'f', 'fh', 'fl', 'mh')
+pts <- c('asexual_pt', 'female_pt', 'female_pt', 'female_pt', 'male_pt')
+
+fld_strns = paste0('SC', 1:8)
+strain_dset_lvls = c( fld_strns, 'NF54', '7G8', 'NF54_A', 'Lab', 'Doublet')
+sample_id_lst <-as.list(c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" ) %>% 
+                          str_sort(., numeric = T))
+
+strain_dset_lvls_m = paste(rep(str_remove(sample_id_lst[1:4], "SC"), each=length(fld_strns)), fld_strns, sep = '_')
+strain_dset_lvls_don = c(strain_dset_lvls_m, strain_dset_lvls)
+strain_dset_lvls_don_col = randomcoloR::distinctColorPalette(k = length(strain_dset_lvls_m)) %>% set_names(strain_dset_lvls_m) %>% c(., strain_cols_n)
+
+strns_lab_comps <- combn(c(paste0("SC", 1:8), "Lab"), m = 2, simplify = F) %>% map(., ~paste(.[[1]], .[[2]], sep = "_vs_")) %>% unlist()
+
+fld_strns_nf54_7g8_comps <- combn(c(paste0("SC", 1:8), "NF54", "7G8"), m = 2, simplify = F) %>% map(., ~paste(.[[1]], .[[2]], sep = "_vs_")) %>% unlist()
+
+## Get colours randomly - do once and save output as the colors change everytime it is ran
+# fld_strns_nf54_7g8_comps_col = randomcoloR::distinctColorPalette(k = length(fld_strns_nf54_7g8_comps), runTsne = F) %>% set_names(fld_strns_nf54_7g8_comps)
+fld_strns_nf54_7g8_comps_col = c(SC1_vs_SC2 = "#EE643B", SC1_vs_SC3 = "#82AEE6", SC1_vs_SC4 = "#C2705C", SC1_vs_SC5 = "#B397DE", SC1_vs_SC6 = "#E6E68D", SC1_vs_SC7 = "#733BA0", SC1_vs_SC8 = "#E3BAE6", SC1_vs_NF54 = "#5AD446", SC1_vs_7G8 = "#ECAC50", SC2_vs_SC3 = "#695BE7", SC2_vs_SC4 = "#EDE054", SC2_vs_SC5 = "#4DC2E4", SC2_vs_SC6 = "#ABEBA6", SC2_vs_SC7 = "#E9BE9D", SC2_vs_SC8 = "#A49CA2", SC2_vs_NF54 = "#672EE6", SC2_vs_7G8 = "#EC45D6", SC3_vs_SC4 = "#A2B978", SC3_vs_SC5 = "#7AD8E1", SC3_vs_SC6 = "#6D8AD7", SC3_vs_SC7 = "#9E5C89", SC3_vs_SC8 = "#4D8899", SC3_vs_NF54 = "#5EEADE", SC3_vs_7G8 = "#67EE8C", SC4_vs_SC5 = "#BEE2DE", SC4_vs_SC6 = "#E1489C", SC4_vs_SC7 = "#E58DD1", SC4_vs_SC8 = "#807AE7", SC4_vs_NF54 = "#6CB69E", SC4_vs_7G8 = "#D274E6", SC5_vs_SC6 = "#61ECB7", SC5_vs_SC7 = "#C63FEB", SC5_vs_SC8 = "#9C8556", SC5_vs_NF54 = "#B1E575", SC5_vs_7G8 = "#ADD2EC", SC6_vs_SC7 = "#CAE33A", SC6_vs_SC8 = "#ABEBCD", SC6_vs_NF54 = "#B2AF48", SC6_vs_7G8 = "#E7A5AC", SC7_vs_SC8 = "#E46378", SC7_vs_NF54 = "#D6DEB0", SC7_vs_7G8 = "#E7D4E0", SC8_vs_NF54 = "#9BF43C", SC8_vs_7G8 = "#49B36F", NF54_vs_7G8 = "#E6E7D5", Field_vs_Lab = "#E9A3DC")
+```
+
+
+
+```{r, message=FALSE}
+##Metadata from all p.falciparum genes downloaded from plasmoDB
+Pf3D7_genes_plasmoDB <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3d7_Genes_Summary_270922.csv") %>% 
+  dplyr::rename("gene_id" = `Gene ID` ) %>% 
+  group_by(gene_id) %>% 
+  add_count(name='gn_iso') %>% 
+  ungroup() %>%
+  mutate(across(gene_id, ~case_when(gn_iso>1 ~ source_id,
+                                    TRUE ~ as.character(.)))) %>% 
+  mutate(across(gene_id, ~str_replace(.,"_", "-")))%>%
+  dplyr::rename('Gene_name' = `Gene Name or Symbol`, 'Ka_Ks' = `NonSyn/Syn SNP Ratio All Strains`, 'TM_domains'=`# TM Domains`) %>% 
+  mutate(across(where(is.character), ~na_if(., "N/A")),
+         Gene = coalesce(`Gene_name`, gene_id)
+  )  %>%
+  group_by(Gene) %>% 
+  add_count() %>% 
+  ungroup() %>%
+  mutate(across(Gene, ~case_when(n>1 ~ paste0(.,'_', gene_id),
+                                 TRUE ~ as.character(.)))) 
+
+```
+
+### read in the intergrated objects for downstream MAST DE and visualizations analysis
+```{r, fig.width = 32, fig.height = 7}
+
+msc_gam_combi_noLE_de <- readRDS("data/processed/DB52e_star/msc_gam_combi_noLE_de.RDS")
+msc_gcombi_noLE_sub_sce <- readRDS("data/processed/DB52e_star/msc_gcombi_noLE_sub_sce.RDS")
+
+```  
+
+### Tradeseq fit-gam and condition test in farm
+commands to paste to farm for running tradeseq
+```{r, eval=FALSE}
+##!! NB - Run in farm for speed - parallelization
+# AMMENDED ON 160421 TO submit jobs independently using the script /lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/multipurpose_scripts/tradeseq.R submitted by /lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/scripts/tseq_submsn.sh 
+#!/usr/bin/env
+
+##Check if all the positional variables need are provided, if not then exits and prints out the requirements
+
+.libPaths('/lustre/scratch126/tol/teams/lawniczak/users/jr35/local_libs/R410_libs')
+
+##load libraries
+library(tradeSeq)
+library(RColorBrewer)
+library(SingleCellExperiment)
+library(slingshot)
+library(BiocParallel)
+library(purrr)
+
+##Initializes the positional variables
+args = commandArgs(trailingOnly=TRUE)
+
+i <- args[1]
+
+msc_g_noLE_sub_sce_unbal_f10 <- readRDS('/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_inp/msc_g_noLE_sub_sce_unbal_f10.RDS')
+msc_y21_sub_ptime_unbal_f10 <- readRDS('/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_inp/msc_y21_sub_ptime_unbal_f10.RDS')
+msc_y21_sub_cw_unbal_f10 <- readRDS('/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_inp/msc_y21_sub_cw_unbal_f10.RDS')
+
+# condtns <- c('dset','dset','dset','dset','dset','strain_dset','strain_dset','strain_dset','strain_dset','strain_dset' ,'strain','strain','strain','strain','strain')
+condtns <- c('strain','strain','strain','strain','strain','dset','dset','dset','dset','dset')
+comps <- rep(c('fh','mh'), 2)
+
+
+##fitting GAMs
+knots_no <- c(6,6,6,6,6,8,7,8,9,8)
+# knots_no <- c(8,7,8,9,8,6,6,6,8,8)
+
+sce_obj = c(msc_g_noLE_sub_sce_unbal_f10,msc_g_noLE_sub_sce_unbal_f10)
+ptime_obj = c(msc_y21_sub_ptime_unbal_f10, msc_y21_sub_ptime_unbal_f10)
+cw_obj = c(msc_y21_sub_cw_unbal_f10, msc_y21_sub_cw_unbal_f10)
+
+i=as.numeric(i)
+
+## Subset the relevant cells for each run
+substd_sce = sce_obj[[i]][,!is.na(sce_obj[[i]]@colData[,condtns[i]])]
+substd_ptime = ptime_obj[[i]][!is.na(sce_obj[[i]]@colData[,condtns[i]])]
+substd_cw = cw_obj[[i]][!is.na(sce_obj[[i]]@colData[,condtns[i]])]
+
+## Tradeseq script
+msc_y21_ref_ts_sce_ub_de  <- fitGAM(counts = counts(substd_sce), 
+                                  pseudotime = substd_ptime, 
+                                  cellWeights = substd_cw, 
+                                  nknots =knots_no[i],
+                                  genes = rownames(substd_sce)[rowSums(counts(substd_sce) != 0) > 5],
+                                  conditions = factor(SummarizedExperiment::colData(substd_sce)[, condtns[i]]), 
+                                  verbose = T, 
+                                  parallel = T)
+
+
+## Save tradeseq object
+saveRDS(msc_y21_ref_ts_sce_ub_de, paste0('/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_op/tseq_obj_', condtns[i], '_', comps[i], '.RDS'))
+
+##Running condition test
+msc_y21_condRes_ub_de <- conditionTest(msc_y21_ref_ts_sce_ub_de, pairwise = T)
+
+## Save conditional test object
+saveRDS(msc_y21_condRes_ub_de, paste0('/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_op/tseq_cond_obj_', condtns[i], '_', comps[i], '.RDS'))
+
+```
+
+transfer tradeseq results files from farm to local
+```{r, eval=T}
+# bst <- c(rep('_unbal', 10), rep('', 10), rep('', 5))
+# bst <- c(rep('', 15))
+m_stgs<-names(msc_gcombi_noLE_sub_sce)
+
+for (ts in c('cond_obj', 'obj')){
+    for (st in m_stgs) {
+      for (ds in c('dset', 'lf_strain')){
+      system(paste0('rsync -av --delete jr35@farm5:/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_op/tseq_',ts,'_', ds, '_', st,'.RDS /Users/jr35/Google\\ Drive/My\\ Drive/PHD_documents/malaria_phd/Mali/data/processed/DB52e_star/pseudotime_tradeseq_op/'))
+    }
+  }
+}
+
+
+```
+
+Read in tradeseq files from local
+```{r}
+list.files('data/processed/DB52e_star/pseudotime_tradeseq_op', pattern = "tseq_obj.*_M.*DS$", full.names = T) %>% 
+  str_sort(., numeric = T)  %>% 
+  set_names(nm = (str_remove_all(.,'data/processed/DB52e_star/.*obj_|\\.RDS') %>% str_replace_all(., c('dset'='FieldVlab', 'strain'='StrainsDE', 'lf_strain'='LFStrainsDE')) ))
+```
+
+
+```{r}
+ts_sce_ub_de_k7 <- list.files('data/processed/DB52e_star/pseudotime_tradeseq_op', pattern = "tseq_obj.*_M.*DS$", full.names = T) %>% 
+  str_sort(., numeric = T)  %>% 
+  set_names(nm = (str_remove_all(.,'data/processed/DB52e_star/.*obj_|\\.RDS') %>% str_replace_all(., c('dset'='FieldVlab', 'strain'='StrainsDE', 'lf_strain'='LFStrainsDE')) )) %>%
+  map(., ~readRDS(.x))
+```
+
+```{r}
+de_order <- c(paste0("FieldVlab_", m_stgs[1:8]), paste0("lf_StrainsDE_", m_stgs[9:28]))
+# ts_sce_ub_de_k7 <- ts_sce_ub_de_k7[c(de_order, paste0(de_order[1:10], '_unbal'))]
+ts_sce_ub_de_k7 <- ts_sce_ub_de_k7[c(de_order)]
+
+```
+
+Read in tradeseq condition DE files from local
+```{r}
+condRes_de_k7 <- list.files('data/processed/DB52e_star/pseudotime_tradeseq_op', pattern = "tseq_cond_obj.*_M.*DS$", full.names = T) %>% str_sort(., numeric = T)  %>% 
+  set_names(nm = (str_remove_all(.,'data/processed/DB52e_star/.*obj_|\\.RDS') %>% str_replace_all(., c('dset'='FieldVlab', 'strain'='StrainsDE', 'lf_strain'='LFStrainsDE')) ))  %>%
+  map(., ~readRDS(.x))
+```
+
+```{r}
+condRes_de_k7 <- condRes_de_k7[c(de_order)]
+condRes_de_k7 <- condRes_de_k7[!is.na(names(condRes_de_k7))]
+ts_sce_ub_de_k7 <- ts_sce_ub_de_k7[names(condRes_de_k7)]
+
+```
+
+
+Read in tradeseq files from local
+```{r}
+# msc_y21_ref_ts_sce_ub_de <- readRDS('data/processed/DB52e_star/pseudotime_tradeseq/msc_y21_ref_ts_sce_ub_de.RDS') %>% 
+#   set_names(paste0(names(.), '_', c(rep('FieldVlab', 5), rep('StrainsDE', 5))))
+```
+
+#### Visualize cells tradeseq trajectories {.tabset}
+
+#### Read in and format tradeseq condition test results (lab VS field, field VS field) (Performed in farm)  
+
+
+```{r}
+##NOTE!!! replace the conditional test file with the newly generated one which applied 7 clusters
+##Ajusting the global and pairwise pvalues - old p values discarded
+msc_g_noLE_condRes_ub_de <- map(condRes_de_k7, ~.x %>%
+                             mutate(across(starts_with('pvalue'), ~p.adjust(., "fdr"))) %>%
+                             arrange(desc(waldStat)) %>%
+                             rownames_to_column('gene_id'))
+
+```
+
+
+
+```{r}
+##save condition results for GSEA
+saveRDS(msc_g_noLE_condRes_ub_de, 'data/processed/DB52e_star/msc_g_noLE_condRes_ub_de.RDS')
+```
+
+```{r}
+msc_g_noLE_ref_ts_sce_ub_de <- ts_sce_ub_de_k7
+```
+
+
+```{r}
+### based on mean smoother
+### All these genes are in the top 22 with waldstat > 20
+cond_gns_005_ub_de <- pmap(list(msc_g_noLE_condRes_ub_de, msc_g_noLE_ref_ts_sce_ub_de),~{
+  
+  b = levels(..2$tradeSeq$conditions)
+  
+  print(b)
+  
+  if (dim(..1)[2] > 4) {
+     ..1 %>% rename_with(., ~str_replace_all(., c('s7' = b[7],
+                                               's6' = b[6],
+                                               's5' = b[5],
+                                               's4' = b[4],
+                                               's3' = b[3],
+                                               's2' = b[2],
+                                               's1' = b[1],
+                                               # ' ' = '',
+                                               'vm'='_vs_m',
+                                               'vS'='_vs_S',
+                                               'vL'='_vs_L',
+                                               'vN'='_vs_N',
+                                               'v7'='_vs_7',
+                                               #'4 \\(O'='4\\(O',
+                                               'cond'=''))
+  )
+  } else {
+  
+    
+    ..1 %>% mutate(across(.cols = -c("gene_id"), .names = '{.col}_2')) %>% rename_with(., ~str_replace_all(., c('2' = paste0(b[1], "_vs_", b[2]),
+                                               #'4 \\(O'='4\\(O',
+                                               'cond'='')))
+  
+  }
+  
+})
+
+
+```
+
+```{r}
+
+cond_gns_005_ub_de <- c(cond_gns_005_ub_de) %>%
+  map(., ~left_join(., Pf3D7_genes_plasmoDB %>% dplyr::select(gene_id, Gene, Ka_Ks, `Transcript Product Description`, TM_domains, `Computed GO Functions`), by = 'gene_id'))
+
+```
+
+
+```{r}
+# msc_y21_ref_ts_sce_ub_de <- msc_y21_ref_ts_sce_ub_de[c(1:15)]
+# cond_gns_005_ub_de <- cond_gns_005_ub_de[c(1:15)]
+```
+
+#### Plot smoothers function
+
+
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+tde_smooth_plt <- function(tde_obj_lst = msc_g_noLE_ref_ts_sce_ub_de[10],
+                           cond_obj_lst = cond_gns_005_ub_de[10],
+                           pw_comp= 'waldStat_SC2_vs_SC6', 
+                           n_gns = c(1:5)
+)
+{
+  
+  list(tde_obj_lst, cond_obj_lst) %>% 
+    pmap(.,possibly(~{
+      
+      gns = ..2 %>% filter(!!rlang::sym(pw_comp) > 20) %>% arrange(desc(!!rlang::sym(pw_comp)))  %>% pull(gene_id) %>% .[n_gns]
+      
+      gn_names = ..2 %>% filter(!!rlang::sym(pw_comp) > 20) %>% arrange(desc(!!rlang::sym(pw_comp))) %>% pull(Gene) %>% .[n_gns]
+      print(gn_names)
+      
+      tde = ..1
+      
+      list(gns, gn_names) %>% 
+        pmap(., possibly(~{
+          plotSmoothers(tde, 
+                        assays(tde)$counts,
+                        gene = ..1,
+                        alpha = 1, 
+                        border = TRUE) +
+            labs(title = ..2)
+        }, 'missing'))
+    }, 'missing'))
+}
+
+```
+
+
+#### smoothers for select genes that are differentially expressed between strains {.tabset}
+
+
+```{r, results='asis', warning=F, message=F}
+
+tde_smooth_plt(tde_obj_lst = msc_g_noLE_ref_ts_sce_ub_de[str_detect(names(msc_g_noLE_ref_ts_sce_ub_de), "MSC1_")],
+               cond_obj_lst = cond_gns_005_ub_de[str_detect(names(cond_gns_005_ub_de), "MSC1_")],
+               pw_comp= 'waldStat_SC1_vs_SC2',
+               n_gns = c(1:5)
+)
+
+```
+
+
+```{r, results='asis', warning=F, message=F}
+
+tde_smooth_plt(tde_obj_lst = msc_g_noLE_ref_ts_sce_ub_de[str_detect(names(msc_g_noLE_ref_ts_sce_ub_de), "MSC3_")],
+               cond_obj_lst = cond_gns_005_ub_de[str_detect(names(cond_gns_005_ub_de), "MSC3_")],
+               pw_comp= 'waldStat_SC1_vs_SC2',
+               n_gns = c(1:5)
+)
+
+```
+
+
+Heatmap plotting function
+```{r}
+### Annotation groups for the header ie column
+tseq_de_hmap <- function(tseq = msc_g_noLE_ref_ts_sce_ub_de[[1]], de_tbl , pnts = 30, rnames = F, comp_grps){
+  
+  # gns = de_tbl %>% filter(if_any(matches("pvalue.*"), ~. < 0.05)) %>% pull(gene_id)
+  gns = de_tbl %>% filter(pvalue < 0.05) %>% pull(gene_id)
+
+  # print(str(gns))
+  ##Edited from the original version to allow the labelling of rows with gene names
+  msc_yhatSmooth <- predictSmooth(tseq, gene = gns, nPoints = pnts, tidy = FALSE) %>% 
+        t() %>%scale() %>% t() %>% as.data.frame()%>% 
+        rownames_to_column('gene_id') %>% 
+        left_join(., Pf3D7_genes_plasmoDB  %>% dplyr::select("Gene", "gene_id"), by = 'gene_id') %>% 
+        dplyr::select(-c(gene_id)) %>% 
+        column_to_rownames('Gene')
+  
+  # print(str(msc_yhatSmooth))
+  msc_col_annot <- predictSmooth(tseq, gene = gns, nPoints = pnts, tidy = T)  %>% 
+        mutate(point = paste0("point", rep(rep(1:pnts,length(unique(tseq@colData$tradeSeq$conditions))),length(gns))), 
+               lin_id = paste0('lineage', lineage,'_condition', condition, '_',point)) %>%
+        rownames_to_column('No')  %>% 
+        dplyr::select(lin_id,time,condition)%>% 
+        distinct()%>% 
+        column_to_rownames('lin_id') %>%
+        rename('Pseudotime' = time, 'Condition' = condition)
+  # print(str(msc_col_annot))
+
+  hmap<- pheatmap::pheatmap(msc_yhatSmooth %>% as.data.frame() %>% as.matrix(),
+                         cluster_cols = FALSE,
+                         show_rownames = {{rnames}}, 
+                         show_colnames = F, 
+                         main = comp_grps,
+                         legend = T,
+                         # silent = TRUE#, 
+                         annotation_row = Pf3D7_genes_plasmoDB %>%filter(!duplicated(gene_id)) %>% 
+                           dplyr::select("Gene", "Ka_Ks") %>% column_to_rownames("Gene"),
+                         annotation_col = (msc_col_annot %>% dplyr::select(Pseudotime, Condition))
+                         # 
+      )
+  # str(hmap)
+  return(hmap)
+  # print(hmap)
+  # print(pheatmap::pheatmap(msc_yhatSmooth %>% as.data.frame() %>% as.matrix()))
+      cat('\n')
+      cat("\n")
+    
+}
+```
+
+
+
+#### heatmaps for DE between field and lab in the asexual, female and males {.tabset}
+
+```{r, results='asis', warning=F, message=F}
+
+hmap_plt<- list(msc_g_noLE_ref_ts_sce_ub_de, 
+                # map(cond_gns_005_ub_de, ~.x %>% filter(if_any(matches("pvalue"), ~. < 0.05)) %>% pull(gene_id)), 
+                cond_gns_005_ub_de,
+                rep(30, length(cond_gns_005_ub_de)), 
+                rep(F, length(cond_gns_005_ub_de)), 
+                names(msc_g_noLE_ref_ts_sce_ub_de)) %>% 
+  pmap(., possibly(~{
+  tseq_de_hmap(tseq = ..1, de_tbl= ..2, pnts = ..3, rnames = ..4, comp_grps = ..5)
+}, 'missing genes'))
+  
+  # tseq_de_hmap(tseq = msc_g_noLE_ref_ts_sce_ub_de[[1]], gns= map(cond_gns_005_ub_de[1], ~.x %>% filter(if_any(matches("pvalue"), ~. < 0.05)) %>% pull(gene_id)) %>% flatten() %>% as.character(), pnts = 30, rnames = F, title = "Strain DE")
+  #                      
+hmap_plt
+
+```
+
+
+#### Correlation between waldStat association signal strength between comparisons
+
+```{r, warning=F, message=F}
+
+lowerfun <- function(data, mapping) {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(size = 0.3, alpha = 0.3) +
+    geom_abline(slope = 1, intercept = 0, color = "blue")
+}
+
+cond_gns_005_ub_de%>% 
+  map(. %>% dplyr::select('gene_id', waldStat) %>% filter(waldStat<5000)) %>% 
+  bind_rows(., .id = "stages") %>% 
+  pivot_wider(names_from = 'stages', values_from = 'waldStat') %>% 
+  column_to_rownames('gene_id') %>% 
+  ggpairs(lower = list(continuous = GGally::wrap(lowerfun)),
+          upper = list(continuous = wrap("cor", size = 5)))
+```
+
+
+## MAST DE adjusting for pseudotime
+
+MAST DE on the entire dataset before subsampling. Subsampling is not necessary for MAST and also for tradeseq
+### Prepare dataset
+Normalizing and scaling the data in the subseted seurat objects - may have been done before on the larger parent object but just repeating since will not change anything as it starts from the raw counts.
+
+Adding pseudotime metadata from the single cell experiment object 
+Scaling is for visualization
+
+
+```{r}
+##REMEMBER TO REMOVE CLUSTERS WITH VERY FEW CELLS AND DOUBLETS SEURAT
+# msc_gam_combi_noLE_de <- msc_gam_combi_noLE_de[, cells_de]
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# Add to metadata the dataset/conditions and ptime cat
+# DefaultAssay(msc_gam_combi_noLE_de[[1]]) <- "RNA"
+# DefaultAssay(msc_gam_combi_noLE_de[[2]]) <- "RNA"
+DefaultAssay(msc_gam_combi_noLE_de[[1]]) <- "RNA"
+
+all_gns = unique(rownames(msc_gam_combi_noLE_de[[1]]))
+# 
+# msc_g_noLE_v3_combi_scld <- msc_gam_combi_noLE_de %>%
+#   NormalizeData(., normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE) %>% 
+#   ScaleData(., features = all_gns,  verbose = FALSE) %>%
+#   .[,rownames(fld_vs_lb_mdata)] %>% 
+#   AddMetaData(., fld_vs_lb_mdata)
+# 
+# 
+# 
+# msc_g_noLE_v3_combi_afm_seu <- list(msc_g_noLE_sub_sce_unbal_f10, pts) %>%
+#     pmap(~msc_g_noLE_v3_combi_scld[, colnames(..1[,!is.na(..1@colData[,'strain_dset'])])] 
+#     )
+
+
+##Subset original seurat object with only cells in the subsetted DE objects and add pseudotime as metadata
+# msc_g_noLE_v3_combi_afm_seu <- list(msc_g_noLE_sub_sce_unbal_f10, pts) %>%
+#   pmap(~msc_gam_combi_noLE_de[, colnames(..1[,!is.na(..1@colData[,'strain_dset'])])] %>%
+#          AddMetaData(., SummarizedExperiment::colData(..1)[, ..2, drop=F] %>% data.frame() ) %>%
+#          NormalizeData(., normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE) %>%
+#          ScaleData(., features = all_gns,  verbose = FALSE)
+#   )
+
+##Doing MAST for the lf_strain - lab_field_strain
+pts <- rep(c("female_pt", "male_pt"), 14)
+# msc_g_noLE_v3_combi_afm_seu <- list(msc_gcombi_noLE_sub_sce[6:15], pts_lfs, c(rep('strain_dset', 5), rep('lf_strain', 5))) %>%
+msc_g_noLE_v3_combi_afm_seu <- list(msc_gcombi_noLE_sub_sce, pts, c(rep('strain_dset', 8), rep('lf_strain', 20)), rep(msc_gam_combi_noLE_de, times = 28)) %>%
+  pmap(~..4[, colnames(..1[,!is.na(..1@colData[,..3])])] %>%
+         AddMetaData(., SummarizedExperiment::colData(..1)[, ..2, drop=F] %>% data.frame() ) %>%
+         NormalizeData(., normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE) %>%
+         ScaleData(., features = all_gns,  verbose = FALSE)
+  )
+```
+
+
+### Actual MAST DE between pairwise strains and fieldvslab 
+
+MAST DE adjusting for pseudotime as a latent variable
+
+```{r, message=FALSE, warning=FALSE}
+de_idents <- c(rep('dset', 8), rep('lf_strain', 20))
+msc_g_noLE_v3_combi_strn_mast<- map2(msc_g_noLE_v3_combi_afm_seu, de_idents, ~SetIdent(.x, value=.y))
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+saveRDS(msc_g_noLE_v3_combi_strn_mast, 'data/processed/DB52e_star/msc_g_noLE_v3_combi_strn_mast.RDS')
+
+```
+
+```{r, message=FALSE, warning=FALSE, eval=F}
+##!! NB Rerun only when the DE inputs change - takes looooonng
+## Mast DE of dataset with male low (ml) included - shouldnt have any contribution as each stage handled differently
+# strns_ub_pairwise_mkrs_pt_ml <- list(msc_g_noLE_v3_combi_strn_mast, rep(pts,2), de_idents) %>%
+#   pmap( ~{
+#     # ide = ..3
+#     a = combn(levels(droplevels(..1@meta.data[,..3])), 2,simplify = F) 
+#     obj = ..1
+#     pseudos = ..2
+#     map(a, ~FindMarkers(obj, ident.1 = .x[1], ident.2 = .x[2], latent.vars = pseudos, logfc.threshold = 0, test.use = 'MAST') %>% rownames_to_column('gene_id')) %>%
+#       set_names(map(a, ~paste(., collapse = '_vs_') %>% str_remove_all(' '))) %>%
+#       bind_rows(., .id = 'pw_comparison')
+#     
+#   })
+# saveRDS(strns_ub_pairwise_mkrs_pt_ml,'data/processed/DB52e_star/strns_ub_pairwise_mkrs_pt_ml.RDS')
+
+
+## Mast DE of dataset with male low (ml) included - shouldnt have any contribution as each stage handled differently
+## Including lab and field strain DE
+## !!!min.cells.group added for mh in the strain_dset where there's only balancing in lab VS field - we need to remove later
+
+pts_all<- c(rep(pts,3))
+pts_all<- pts
+
+strns_ub_pairwise_mkrs_pt_ml <- list(msc_g_noLE_v3_combi_strn_mast, pts, de_idents, names(msc_g_noLE_v3_combi_strn_mast)) %>%
+  pmap(., possibly( ~{
+    # ide = ..3
+    a = combn(levels(droplevels(..1@meta.data[,..3])), 2,simplify = F) 
+    obj = ..1
+    pseudos = ..2
+    
+    print(paste("running ...", ..4))
+    
+    map(a, ~FindMarkers(obj, ident.1 = .x[1], ident.2 = .x[2], latent.vars = pseudos, logfc.threshold = 0, test.use = 'MAST', min.cells.group = 1) %>% rownames_to_column('gene_id')) %>%
+      set_names(map(a, ~paste(., collapse = '_vs_') %>% str_remove_all(' '))) %>%
+      bind_rows(., .id = 'pw_comparison')
+    
+  }, 'missing genes'))
+
+saveRDS(strns_ub_pairwise_mkrs_pt_ml,'data/processed/DB52e_star/strns_ub_pairwise_mkrs_pt_ml.RDS')
+# c(strns_ub_pairwise_mkrs_pt_ml_lf, strns_ub_pairwise_mkrs_pt_ml)
+
+
+
+```
+
+
+```{r, message=FALSE, warning=FALSE, eval=F}
+##!! NB Rerun only when the DE inputs change - takes looooonng
+### Getting all genes for gsea - saved as RDS and analysis done in functional_GO_n_lit_comparison.RMD
+
+# strns_ub_pairwise_mkrs_pt_ml_gsea_full <- list(msc_g_noLE_v3_combi_strn_mast, rep(pts,2), de_idents) %>%
+#   pmap( ~{
+#     # ide = ..3
+#     a = combn(levels(..1@meta.data[,..3]), 2,simplify = F) 
+#     obj = ..1
+#     pseudos = ..2
+#     map(a, ~FindMarkers(obj, ident.1 = .x[1], ident.2 = .x[2], latent.vars = pseudos, logfc.threshold = 0, test.use = 'MAST', min.pct = -Inf, min.diff.pct = -Inf) %>% rownames_to_column('gene_id')) %>%
+#       set_names(map(a, ~paste(., collapse = '_vs_') %>% str_remove_all(' '))) %>%
+#       bind_rows(., .id = 'pw_comparison')
+#     
+#   })
+# saveRDS(strns_ub_pairwise_mkrs_pt_ml_gsea_full,'data/processed/DB52e_star/strns_ub_pairwise_mkrs_pt_ml_gsea_full.RDS')
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+strns_ub_pairwise_mkrs_pt_ml<- readRDS('data/processed/DB52e_star/strns_ub_pairwise_mkrs_pt_ml.RDS')
+# strns_ub_pairwise_mkrs_pt_ml<- c(strns_ub_pairwise_mkrs_pt_ml[1:16], strns_ub_pairwise_mkrs_pt_ml_new)
+# names(strns_ub_pairwise_mkrs_pt_ml) <- names(msc_g_noLE_v3_combi_strn_mast)
+
+# strns_ub_pairwise_mkrs_pt_ml_all <- c( strns_ub_pairwise_mkrs_pt_ml,strns_ub_pairwise_mkrs_pt_ml_lf)
+# saveRDS(strns_ub_pairwise_mkrs_pt_ml_all,'data/processed/DB52e_star/strns_ub_pairwise_mkrs_pt_ml_all.RDS')
+# 
+# strns_ub_pairwise_mkrs_pt_ml_all<- readRDS('data/processed/DB52e_star/strns_ub_pairwise_mkrs_pt_ml_all.RDS')
+# strns_ub_pairwise_mkrs_pt_ml <- strns_ub_pairwise_mkrs_pt_ml_all
+```
+
+MAST DE not adjusting for pseudotime (no pseudotime - npt)
+```{r, message=FALSE, warning=FALSE, eval=F}
+##!! NB Rerun only when the DE inputs change - takes looooonng - also not necessary. Only used to assess effect of adjusting for pseudotime
+strns_ub_pairwise_mkrs_npt_ml <- list(msc_g_noLE_v3_combi_strn_mast, rep(pts,2), de_idents) %>%
+  pmap( ~{
+    a = combn(levels(..1@meta.data[,..3]), 2,simplify = F) 
+    obj = ..1
+    pseudos = ..2
+    map( a, ~FindMarkers(obj, ident.1 = .x[1], ident.2 = .x[2], logfc.threshold = 0, test.use = 'MAST') %>% rownames_to_column('gene_id')) %>%
+      set_names(map(a, ~paste(., collapse = '_vs_') %>% str_remove_all(' '))) %>%
+      bind_rows(., .id = 'pw_comparison')
+    
+  })
+
+saveRDS(strns_ub_pairwise_mkrs_npt_ml,'data/processed/DB52e_star/strns_ub_pairwise_mkrs_npt_ml.RDS')
+
+```
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+strns_ub_pairwise_mkrs_npt_ml<- readRDS('data/processed/DB52e_star/strns_ub_pairwise_mkrs_npt_ml.RDS')
+
+```
+
+#### Comparing MAST DE results when we adjust for pseudotime and when we dont
+
+```{r, message=FALSE, warning=FALSE}
+# strns_ub_pairwise_mkrs_npt_ml <- strns_ub_pairwise_mkrs_npt_ml %>% map(. %>% mutate(across(pw_comparison, ~str_replace_all(.,c('Field_vs_Lab' = 'Field_vs_Lab')))))
+
+```
+
+#### Comparing MAST DE results when we adjust for pseudotime and when we dont
+```{r, fig.width= 8, fig.height=3, eval=F}
+## !! NB - also not necessary. Only used to assess effect of adjusting for pseudotime
+list(strns_ub_pairwise_mkrs_pt_ml, strns_ub_pairwise_mkrs_npt_ml) %>%
+  pmap(
+    ~..1 %>% 
+      left_join(., ..2, by = c('gene_id', 'pw_comparison'), suffix =c(".pt", ".npt")) %>%
+      ggplot(., aes(x=log10(p_val_adj.pt), y=log10(p_val_adj.npt))) + 
+      geom_point() + 
+      facet_grid(.~pw_comparison, scales = "free_x") +
+      geom_vline( xintercept = -3)+
+      geom_hline( yintercept = -3) +
+      geom_abline()
+  )
+
+```
+
+
+```{r}
+##!!!!!NOTE - remove the empty MSC1_fle
+# strns_ub_pairwise_mkrs_pt_ml_sst <- strns_ub_pairwise_mkrs_pt_ml[c(1:5, 7:20)]
+# msc_g_noLE_v3_combi_afm_seu_sst <- msc_g_noLE_v3_combi_afm_seu[c(1:5,7:20)]
+strns_ub_pairwise_mkrs_pt_ml_sst <- strns_ub_pairwise_mkrs_pt_ml
+msc_g_noLE_v3_combi_afm_seu_sst <- msc_g_noLE_v3_combi_afm_seu
+cond_gns_005_ub_de_sst <- cond_gns_005_ub_de
+pts_sst <- pts
+
+```
+
+### MAST VS Tradeseq analsys
+####  MAST gene QC
+List genes expressed in less than 5 cells in each subset objects used as MAST input that were also removed when running tradeseq fitGAM
+
+```{r}
+map2(strns_ub_pairwise_mkrs_pt_ml_sst, msc_g_noLE_v3_combi_afm_seu_sst, ~.x %>% filter(gene_id %in% rownames(.y)[!(rowSums(.y@assays$RNA@counts != 0) > 5)])) %>% bind_rows(., .id = 'Stage')
+
+```
+
+Remove genes above ????NB NB - refer line 734
+```{r}
+strns_ub_pairwise_mkrs_pt_ml_sst <- map2(strns_ub_pairwise_mkrs_pt_ml_sst, msc_g_noLE_v3_combi_afm_seu_sst, ~.x %>% filter(gene_id %in% rownames(.y)[(rowSums(.y@assays$RNA@counts != 0) > 5)]))
+
+```
+
+#### MAST & Tradeseq merge
+Merge MAST results with tde results so as to use cut-off accounting for both methods (P<0.05 MAST & waldstat >10 TDE)
+```{r, fig.width= 8, fig.height=3, warning=FALSE}
+mast_tde_corr_tbls_w_na <- c(
+  list(cond_gns_005_ub_de_sst[1:8], strns_ub_pairwise_mkrs_pt_ml_sst[1:8]) %>% 
+    # pmap(~{ left_join(..1 %>% dplyr::select(gene_id, waldStat, pvalue), ..2, by = 'gene_id') %>%
+    pmap(~{ full_join(..2, ..1 %>% dplyr::select(gene_id, waldStat, pvalue),  by = 'gene_id')}),
+  list(cond_gns_005_ub_de_sst[c(9:28)], strns_ub_pairwise_mkrs_pt_ml_sst[c(9:28)]) %>%
+    pmap(
+      ~..1 %>% 
+        dplyr::select(gene_id, starts_with(c('waldStat_','pvalue_'))) %>%
+        pivot_longer(.,cols = starts_with(c('waldStat_','pvalue_')), 
+                     # names_pattern = "(.*)_(SC._vs.*)",
+                     names_pattern = "(waldStat|pvalue)_(.*)",
+                     names_to = c( ".value", "ts_pw_comp")) %>% 
+        # left_join(., ..2, by = c('gene_id', 'ts_pw_comp'='pw_comparison')) 
+        full_join(..2, ., by = c('gene_id', 'pw_comparison'='ts_pw_comp')) 
+    )
+)
+
+```
+
+
+##### MAST & Tradeseq NA genes 
+Check the genes with missing values in either test - tradeseq/MAST
+Thrown out probably because of not meeting the log fold threshold
+```{r, fig.width= 8, fig.height=3, warning=FALSE}
+##mast missing
+map(mast_tde_corr_tbls_w_na, ~.x %>% dplyr::count(pw_comparison, is.na(waldStat), is.na(p_val_adj))) %>% bind_rows(.id = 'stage') %>% filter(`is.na(p_val_adj)` == T)
+
+##tde missing
+map(mast_tde_corr_tbls_w_na, ~.x %>% dplyr::count(pw_comparison, is.na(waldStat), is.na(p_val_adj))) %>% bind_rows(.id = 'stage') %>% filter(`is.na(waldStat)` == T)
+
+```
+
+Remove mast missing genes above
+```{r}
+map(mast_tde_corr_tbls_w_na,  ~.x %>% filter(is.na(waldStat)) %>% ggplot(., aes(x = pw_comparison, y =avg_log2FC)) +geom_violin())
+```
+
+```{r}
+map(mast_tde_corr_tbls_w_na,  ~.x %>% filter(is.na(waldStat)) %>% ggplot(., aes(x = log10(p_val_adj), y =avg_log2FC)) +geom_point())
+```
+
+
+
+```{r}
+map(mast_tde_corr_tbls_w_na,  ~.x %>% filter(is.na(p_val_adj)) %>% ggplot(., aes(x = waldStat, y =log10(pvalue))) +geom_point() + geom_hline(yintercept = 0.05) +geom_vline(xintercept = 10))
+```
+
+```{r}
+map(mast_tde_corr_tbls_w_na,  ~.x %>% filter(is.na(waldStat) |is.na(p_val_adj)) %>% dim)
+
+```
+
+```{r}
+mast_tde_corr_tbls <- map(mast_tde_corr_tbls_w_na,  ~.x %>% filter(!is.na(waldStat) & !is.na(p_val_adj)))
+
+```
+
+```{r}
+##Number of DE genes
+map(mast_tde_corr_tbls, ~.x |> filter(p_val_adj < 0.05 & waldStat>10) |> pull(gene_id) |> unique() |> length())
+
+```
+
+```{r}
+saveRDS(mast_tde_corr_tbls, 'data/processed/DB52e_star/mast_tde_corr_tbls.RDS')
+
+```
+
+
+```{r}
+
+##Function to save tables in excel as sheets
+
+createWorksheet <- function(x, y){
+  wb <- createWorkbook()
+  for(i in seq_along(x)){
+    addWorksheet(wb, names(x)[i])
+    writeData(wb, sheet = names(x)[i], x[[i]])
+    saveWorkbook(wb, file = y, overwrite = TRUE)
+  }
+}
+
+```
+
+
+```{r}
+##!!!! NOTE - MANUSCRIPT MAST TRADESEQ DE table
+##Preprocess the list of field_lab DE dfs with appropriate names to workbook with each stage as a sheet and add important metadata
+mast_tde_de_export <- mast_tde_corr_tbls %>% map(., ~filter(., waldStat > 10 & p_val_adj <0.05 &(str_detect(pw_comparison, 'Field_vs_Lab') | str_detect(pw_comparison, 'SC._vs_SC.') | str_detect(pw_comparison, 'NF54_vs_7G8'))) %>% dplyr::rename(c('tradeseq_waldStat' = waldStat, 'tradeseq_pvalue' = pvalue)) %>% dplyr::rename_with(., ~paste0('MAST_',.), c('p_val', 'avg_log2FC', 'pct.1', 'pct.2', 'p_val_adj')) %>% left_join(.,Pf3D7_genes_plasmoDB %>% dplyr::select(gene_id, Gene), by = 'gene_id'))
+
+names(mast_tde_de_export) <- str_replace_all(str_remove(names(mast_tde_de_export), 'FieldVlab_|lf_StrainsDE_'), c('asx'='Asexual DE', 'fh'='Female (HE) DE', 'fl'='Female (LE) DE', 'mh'='Male (HE) DE'))
+
+##Export the list of field_lab DE dfs with appropriate names to workbook with each stage as a sheet
+# createWorksheet(mast_tde_de_export[c(1,3:5)], "../Mali/v3_science_manuscript/tables/fvl_mast_tde_de_export.xlsx") 
+
+## Write out field versus lab and powered separate field and separate lab as RDS so as to include the GO analysis
+saveRDS(mast_tde_de_export[c(1:8, 25:28)], "../Mali/v3_science_manuscript/tables/fvl_n_powered_mast_tde_de_export.RDS")
+  
+##Get weak powered analysis
+mast_tde_de_export_wk <- mast_tde_de_export[c(17:19,21:24)]
+
+##Retain only weak SC6 comparisons in msc14 female
+mast_tde_de_export_wk["MSC14_f_don"] <- map(mast_tde_de_export_wk["MSC14_f_don"],  ~filter(.x, str_detect(pw_comparison, "SC6")))
+
+names(mast_tde_de_export_wk) <- paste0(2:(length(mast_tde_de_export_wk)+1), ".", str_replace_all(names(mast_tde_de_export_wk), c("f_don" = "female", "m_don" = "male")))
+
+##Export the list of field strain_strain DE dfs with appropriate names to workbook with each stage as a sheet
+# createWorksheet(mast_tde_de_export[c(17:24)], "../Mali/v3_science_manuscript/tables/data S13 - Field strains MAST & tradeseq DE.xlsx") 
+createWorksheet(mast_tde_de_export_wk, "../Mali/v3_science_manuscript/tables/data S13 - Low power field strains MAST & tradeseq DE.xlsx") 
+```
+
+#### MAST & Tradeseq correlation
+function to plot correlation between MAST and tradeseq and visualize disparities between the 2 methods for the different pairwise strain comparisons
+```{r}
+pw_corr_plot <- function(g_tbls = mast_tde_corr_tbls){
+  for (i in 1:length(g_tbls)) {
+    tryCatch({
+      pt<-ggplot(g_tbls[[i]], aes(x=waldStat, y=log10(p_val_adj))) +
+              # geom_point() + 
+              # facet_grid(.~pw_comparison, scales = "free_x") +
+              geom_point(aes(color = pw_comparison)) +
+              stat_cor(method = "pearson", label.x = 50, label.y = -6)+ 
+              geom_vline( xintercept = 10)+
+              geom_hline( yintercept = log10(0.05))+
+              theme_classic()+
+              theme(axis.text=element_text(size=20), 
+                    axis.title=element_text(size=18,face="bold"), 
+                    legend.text = element_text(size = 16) ,
+                    legend.title = element_text(size = 18, face = "bold"),
+                    strip.text.x = element_text(size = 16, face = "bold"))
+      return(pt)
+    }, error = function(e) {
+      message(as.character('ss')) # exclude this line to return NULL quietly
+      return(NULL)
+    })
+  }
+}
+```
+
+```{r}
+pw_corr_plot <- function(g_tbls = mast_tde_corr_tbls){
+
+      ggplot(g_tbls, aes(x=waldStat, y=-log10(p_val_adj))) +
+              # geom_point() + 
+              # facet_grid(.~pw_comparison, scales = "free_x") +
+              geom_point(aes(color = pw_comparison)) +
+              scale_color_manual(values = fld_strns_nf54_7g8_comps_col, name = "Comparison") +
+              stat_cor(method = "pearson", label.x = 80, label.y = 5)+ 
+              geom_vline( xintercept = 10)+
+              geom_hline( yintercept = -log10(0.05))+
+              labs(x = "tradeSeq waldStat", y = "Adjusted\nMAST P(-log10)") +
+              theme_classic()+
+              theme(axis.text=element_text(size=20), 
+                    axis.title=element_text(size=18,face="bold"), 
+                    legend.text = element_text(size = 16) ,
+                    legend.title = element_text(size = 18, face = "bold"),
+                    strip.text.x = element_text(size = 16, face = "bold"))
+}
+```
+
+
+Correlation between MAST and tradeseq 
+```{r}
+# pw_corr_plot(g_tbls = mast_tde_corr_tbls)
+de_corr_plts <- map(mast_tde_corr_tbls, ~{
+  pw_corr_plot(.x %>% filter(!str_detect(pw_comparison, 'SC._vs_[L|N|7].*'))%>% filter(!str_detect(pw_comparison, 'NF54_A')))
+  } )
+
+de_corr_plts
+```
+
+
+
+##Comparing between samples
+```{r, fig.width= 8, fig.height=3}
+# mast_tde_corr_tbls[[8]] %>% inner_join(., mast_tde_corr_tbls[[12]], by = c('gene_id', 'pw_comparison'))  %>% ggplot(., aes(x=p_val_adj.x, y=p_val_adj.y)) +
+mast_tde_corr_tbls[[2]] %>% inner_join(., mast_tde_corr_tbls[[4]], by = c('gene_id', 'pw_comparison'))  %>% 
+  ggplot(., aes(x=waldStat.x, y=waldStat.y)) +
+    # geom_point() + 
+    # facet_grid(.~pw_comparison, scales = "free_x") +
+    geom_point(aes(color = pw_comparison)) +
+    stat_cor(method = "pearson", label.x = 0, label.y = 0)+ 
+    # geom_vline( xintercept = 10)+
+    # geom_hline( yintercept = log10(0.05))+
+    theme_classic()+
+    theme(axis.text=element_text(size=20), 
+          axis.title=element_text(size=18,face="bold"), 
+          legend.text = element_text(size = 16) ,
+          legend.title = element_text(size = 18, face = "bold"),
+          strip.text.x = element_text(size = 16, face = "bold"))
+
+```
+
+
+overlap in genes upregulated in second strain versus the first
+Asexual
+```{r, fig.width= 8, fig.height=3}
+
+# strns_comps =  c('SC1_vs_SC2', 'SC2_vs_SC3', 'SC2_vs_SC6', 'SC1_vs_SC3')
+# strns_comps =  c("SC1_vs_SC2", "SC1_vs_SC3", "SC1_vs_SC6", "SC2_vs_SC3", "SC2_vs_SC6", "SC3_vs_SC6")
+
+list(strns_ub_pairwise_mkrs_pt_ml_sst[11]) %>%
+  pmap(., ~{
+    mast_de_tbl = ..1 %>% filter(p_val_adj < 0.05) %>% arrange(p_val_adj)
+    strns_comps = mast_de_tbl %>% pull(pw_comparison) %>% unique()
+    print(length(strns_comps))
+    
+    map(strns_comps, ~ mast_de_tbl %>% 
+          filter(p_val_adj < 0.05  & pw_comparison== .x ) %>% 
+          pull(gene_id)) %>% 
+      set_names(.,strns_comps) %>% 
+      ggvenn(., fill_color =c("#0073C2FF", "#EFC000FF", "#868686FF", "#9186dd"), stroke_size = 0.5, set_name_size = 4, text_size = 10, show_percentage = F )
+  }
+  ) 
+```
+UpSet plot
+```{r}
+## Get relevant strain comparisons and arrange appropriately
+strns_comps_w_lab =  map(strns_ub_pairwise_mkrs_pt_ml_sst, ~unique(.$pw_comparison)) %>% unlist() %>% unique() 
+strns_comps_w_lab =  c(sort(strns_comps_w_lab[!(strns_comps_w_lab %in% c("NF54_vs_7G8","NF54_vs_NF54_A", "7G8_vs_NF54_A","Field_vs_Lab"))]), c("NF54_vs_7G8","NF54_vs_NF54_A", "7G8_vs_NF54_A","Field_vs_Lab"))
+## Remove donor strain VS field comparison
+strns_comps =  strns_comps_w_lab[!(str_detect(strns_comps_w_lab, ".*SC[0-9]*_vs_[NF54_A$|NF54$|7G8$]") | str_detect(strns_comps_w_lab, ".*vs_NF54_A"))]
+
+list(strns_ub_pairwise_mkrs_pt_ml_sst[10]) %>%
+  pmap(., ~{
+    mast_de_tbl = ..1
+    map(strns_comps, ~ mast_de_tbl %>% 
+          filter(p_val_adj < 0.05  & pw_comparison== .x ) %>% 
+          pull(gene_id)) %>% 
+      set_names(.,strns_comps) %>% fromList(.) %>% UpSetR::upset()
+  }
+  ) 
+
+# gt_fb_vtx_p1_bi_qc_pf7 %>% dplyr::select(id, matches('G1_._._qc')) %>% filter(if_any(starts_with('G'), ~!is.na(.)))  %>% column_to_rownames('id') %>% split.default(., names(.)) %>% map(., ~.x %>% filter(if_all(everything(), ~!is.na(.))) %>% rownames()) %>% fromList(.) %>% upset()
+```
+
+```{r, fig.width= 8, fig.height=3}
+
+# strns_comps =  c('SC2_vs_SC5', 'SC2_vs_SC7', 'SC5_vs_SC7')
+# strns_comps =  c("SC2_vs_SC4", "SC2_vs_SC5", "SC2_vs_SC6", "SC2_vs_SC7", "SC4_vs_SC5", "SC4_vs_SC6", "SC4_vs_SC7", "SC5_vs_SC6", "SC5_vs_SC7", "SC6_vs_SC7" )
+
+list(strns_ub_pairwise_mkrs_pt_ml_sst[c(5, 8:10)]) %>%
+  pmap(., possibly( ~{
+    mast_de_tbl = ..1 %>% filter(p_val_adj < 0.05) %>% arrange(p_val_adj)
+    strns_comps = mast_de_tbl %>% pull(pw_comparison) %>% unique()
+    print(strns_comps)
+    print(length(strns_comps))
+    
+    map(strns_comps, ~ mast_de_tbl %>% 
+          filter(p_val_adj < 0.05  & pw_comparison== .x ) %>% 
+          pull(gene_id)) %>% 
+      set_names(.,strns_comps) %>% 
+      ggvenn(., fill_color =c("#0073C2FF", "#EFC000FF", "#868686FF", "#9186dd"), stroke_size = 0.5, set_name_size = 4, text_size = 12, show_percentage = F )
+  }, "less than 2 groups")
+  ) 
+```
+
+UpSet plot
+```{r}
+list(strns_ub_pairwise_mkrs_pt_ml_sst[c(9:10,14:15)]) %>%
+  pmap(., ~{
+    mast_de_tbl = ..1
+    map(strns_comps, ~ mast_de_tbl %>% 
+          filter(p_val_adj < 0.05  & pw_comparison== .x ) %>% 
+          pull(gene_id)) %>% 
+      set_names(.,strns_comps) %>% fromList(.) %>% UpSetR::upset()
+  }
+  ) 
+
+# gt_fb_vtx_p1_bi_qc_pf7 %>% dplyr::select(id, matches('G1_._._qc')) %>% filter(if_any(starts_with('G'), ~!is.na(.)))  %>% column_to_rownames('id') %>% split.default(., names(.)) %>% map(., ~.x %>% filter(if_all(everything(), ~!is.na(.))) %>% rownames()) %>% fromList(.) %>% upset()
+```
+
+```{r}
+
+mast_tde_corr_tbls[[6]] %>%  
+  filter(p_val_adj < 0.05 & !str_detect(pw_comparison, '.*S.*_vs_Lab')) %>% 
+  dplyr::select(pw_comparison, gene_id) %>%
+  split(.$pw_comparison) %>%
+  map(., . %>% pull(gene_id)) %>% 
+  .[c(1:3, 5)] %>%
+  ggvenn(., set_name_size =2.5)
+
+```
+
+Tradeseq smoother plots for gams SC5 VS SC7 to compare with ggplot ones
+```{r, results='asis', warning=F, message=F}
+
+tde_smooth_plt(tde_obj_lst = msc_g_noLE_ref_ts_sce_ub_de[9:12],
+               cond_obj_lst = cond_gns_005_ub_de_sst[9:12],
+               pw_comp= 'waldStat_SC1_vs_SC2', 
+               n_gns = c(1:5)
+)
+```
+
+#### MAST & Tradeseq association strength disparities
+##### Tradeseq disparities
+Genes significatnt in MAST (adjusted P < 0.05) but not in tradeseq (waldStat < 10)
+
+###### Assess smoothened expression of individuals genes 
+Make dataframe with genes counts per cell for plotting ggplots of gene expression over pseudotime
+```{r}
+#pts8<-  c(pts, pts)
+
+gn_tble_gg_smoother <- list(msc_g_noLE_v3_combi_afm_seu_sst, pts_sst) %>%
+  pmap(~..1@assays$RNA@data %>% as.matrix() %>% t() %>% as.data.frame() %>% rownames_to_column('cell_bc') %>% 
+         left_join(., ..1@meta.data  %>% 
+                     dplyr::select(..2, strain_dset, stageHL)%>% 
+                     rownames_to_column('cell_bc'), by = 'cell_bc') 
+  )
+
+```
+
+
+Grouping plots from same stage and pairwise strain comparison into separate pages
+
+```{r}
+
+stg_strn_mast_gns_smooth_plts <- function(gn_xprsn_tbls =  gn_tble_gg_smoother, 
+                                          gns_strn = map(strns_ub_pairwise_mkrs_pt_ml_sst, 
+                                                         . %>%
+                                                           filter(p_val_adj < 10e-20 & (avg_log2FC > 1 | avg_log2FC < -1))  %>% 
+                                                           arrange(p_val_adj) %>%
+                                                           dplyr::select(gene_id, pw_comparison)), 
+                                          stage_nms = names(strns_ub_pairwise_mkrs_pt_ml_sst), 
+                                          comp_g = 'pw_comparison',
+                                          top_gns = 10,
+                                          ptimes = pts_sst
+) {
+  list(gn_xprsn_tbls, gns_strn, stage_nms, ptimes) %>%
+    pmap(., ~{
+      mast_de_tbl = ..1
+      gns = ..2
+      nms = ..3
+      psdotime = ..4
+      
+      list(strns_comps) %>%
+        pmap(possibly(~{
+          pw_mast <- mast_de_tbl %>% 
+            filter(str_detect(strain_dset, str_replace_all(..1, c('_vs_'='|', 'SC' = '', 'm[0-9]*_' = ''))))
+          
+          gns_l = gns %>% filter(!!rlang::sym(comp_g) == .x) %>% pull(gene_id) %>% head(., n = top_gns)
+          # pdf(paste0('../plots/',nms,..1,'.pdf' ))
+          print(gns_l)
+          
+          plot_list <- map(gns_l, 
+                           ~ggplot(pw_mast, aes(x = !!rlang::sym(psdotime) , y = log2((!!rlang::sym(.x))+1), color = strain_dset)) + 
+                             geom_point() + 
+                             geom_smooth(method = 'gam', formula = y ~ s(x, bs = "cs")) +
+                             theme(legend.position="none")
+          )
+          
+          print(length(plot_list))
+          
+          # extract the legend from one of the plots
+          lege <- cowplot::get_legend(
+            # create some space to the left of the legend
+            plot_list[[1]] + 
+              guides(color = guide_legend(nrow = 1)) +
+              theme(legend.position = "bottom")
+          )
+          
+          
+          ttl_lege <- plot_grid(ggdraw() + 
+                                  draw_label(paste0(nms, '_', ..1),
+                                             fontface = 'bold',
+                                             x = 0,
+                                             hjust = 0
+                                  ),
+                                lege, ncol = 2, nrow = 1)
+          
+          pl1 <- plot_grid(plotlist = plot_list, ncol = 4, nrow = 5) 
+          print(class(pl1))
+          
+          pls <- plot_grid(ttl_lege, pl1, rel_heights = c(0.1, 1), ncol = 1)
+          print(pls)
+          
+          return(list(pl1) %>% set_names(..1))
+          
+          f          # save_plot(paste0("../plots/", nms, '_', ..1, "top_mast_de_gns_smooth.pdf"), plot = pl1, base_height = 13, base_width = 16)
+          
+        }
+        , 'e')
+        ) 
+    }
+    )
+}
+
+```
+
+Function to save plots in pdfs named by stage and pairwise strain comparison in which it is DE. The plots are generated above with the stage_strain_pw_de_comp function
+```{r}
+stg_strn_mast_gns_smooth_plts_saver = function(plts_cnm = 'top_sig', plt_lst = top_sig_gns_plts) {
+  imap(unlist(map(plt_lst, 
+                  ~unlist(.x, recursive = F, use.names = T)), 
+              recursive = F), 
+       possibly(~save_plot(paste0("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/mali2021_all/strn_mast_de_gns_smoothers/", .y, "_",plts_cnm,".pdf"), 
+                           plot = .x, 
+                           base_height = 13, 
+                           base_width = 16), 
+                otherwise = 'error'))
+}
+```
+
+
+Table of genes significatnt in MAST (adjusted P < 0.05) but not in tradeseq (waldStat < 10)
+```{r, fig.width= 8, fig.height=3}
+
+##MASt signal is in ok ie pvalue less than 0.0001 - TDE signal too low i.e waldstat <10
+
+tde_disparities <- list(mast_tde_corr_tbls, strns_ub_pairwise_mkrs_pt_ml_sst) %>%
+  pmap(
+    ~..1 %>%
+      filter(!str_detect(pw_comparison, 'SC._vs_Lab')) %>%
+      filter(waldStat < 10 & p_val_adj < 0.05) 
+  )
+
+```
+
+
+
+```{r}
+# a=msc_gam_combi_noLE_de[, colnames(msc_g_noLE_v3_combi_afm_seu_sst[[1]])]@assays$RNA@counts %>% as.matrix() %>% t() %>% as.data.frame() %>% mutate(totl_gn = rowSums(.)) %>% mutate(across(starts_with('PF'), ~log1p((./totl_gn)*10000))) %>% dplyr::select(-c(totl_gn)) %>% rownames_to_column('cell_bc') %>% left_join(., msc_g_noLE_v3_combi_afm_seu_sst[[1]]@meta.data  %>% dplyr::select(asexual_pt, strain_dset, stageHL)%>% rownames_to_column('cell_bc'), by = 'cell_bc') %>% ggplot(., aes(x = asexual_pt, y = `PF3D7-1234900`, color = strain_dset, shape = stageHL)) + geom_point() + geom_smooth(method = 'gam', formula = y ~ s(x, bs = "cs"))
+# print(a)
+```
+
+
+```{r}
+# strn_0_1_3_mkrs_pt_bsu <- readRDS('data/processed/DB52e_star/strn_0_1_3_mkrs_pt_bsu.RDS')
+
+```
+
+Visualize disparities
+```{r}
+tde_disparities_gns_plts <- stg_strn_mast_gns_smooth_plts(gn_xprsn_tbls = gn_tble_gg_smoother, 
+                                                          gns_strn = map(tde_disparities, 
+                                                                         . %>%
+                                                                           # filter(p_val_adj < 0.9) %>%
+                                                                           arrange(desc(waldStat)) %>% 
+                                                                           dplyr::select(gene_id, pw_comparison)), 
+                                                          stage_nms = names(strns_ub_pairwise_mkrs_pt_ml_sst), 
+                                                          ptimes = pts_sst,
+                                                          comp_g = 'pw_comparison',
+                                                          top_gns = 18)
+
+```
+
+Save tradeseq disparities
+```{r}
+stg_strn_mast_gns_smooth_plts_saver(plts_cnm = 'tde_disparities', plt_lst = tde_disparities_gns_plts)
+```
+
+##### MAST disparities
+Genes significatnt in  tradeseq (waldStat > 10) but not in  MAST (adjusted P > 0.05)
+```{r, fig.width= 8, fig.height=3}
+##TDE signal is in check - MAST signal too low
+
+mast_disparities <- list(mast_tde_corr_tbls, strns_ub_pairwise_mkrs_pt_ml_sst) %>%
+  pmap(
+    ~..1 %>%
+      filter(!str_detect(pw_comparison, 'SC._vs_Lab')) %>%
+      filter(waldStat > 10 & p_val_adj > 0.05) 
+  )
+
+
+
+```
+
+
+
+Correlation between MAST and tradeseq 
+```{r}
+# pw_corr_plot(g_tbls = mast_tde_corr_tbls)
+map(mast_disparities, ~{
+  pw_corr_plot(.x %>% filter(!str_detect(pw_comparison, 'SC._vs_[L|N|7].*'))%>% filter(!str_detect(pw_comparison, 'NF54_A')))
+  } )
+
+```
+Individual gene tradeseq normalised counts visualization smoothers
+
+```{r, results='asis', warning=F, message=F}
+tde_smooth_plt(tde_obj_lst = msc_g_noLE_ref_ts_sce_ub_de[9:10],
+               cond_obj_lst = cond_gns_005_ub_de_sst[9:10],
+               pw_comp= 'waldStat_SC1_vs_SC2', 
+               n_gns = c(1:5)
+)
+
+```
+
+
+individual genes Seurat normalized counts with MAST disparities plots
+```{r}
+mast_disparities_gns_plts <- stg_strn_mast_gns_smooth_plts(gn_xprsn_tbls = gn_tble_gg_smoother, 
+                                                           gns_strn = map(mast_disparities, 
+                                                                          . %>%
+                                                                            # filter(p_val_adj < 0.9) %>%
+                                                                            arrange(desc(waldStat)) %>% 
+                                                                            dplyr::select(gene_id, pw_comparison)), 
+                                                           stage_nms = names(strns_ub_pairwise_mkrs_pt_ml_sst), 
+                                                           ptimes = pts_sst,
+                                                           comp_g = 'pw_comparison',
+                                                           top_gns = 10)
+
+
+
+```
+
+##### Borderline genes
+Save bordeline significant genes
+```{r}
+stg_strn_mast_gns_smooth_plts_saver(plts_cnm = 'mast_disparities', plt_lst = mast_disparities_gns_plts)
+```
+
+
+Top gene tradeseq and MAST
+```{r}
+top_tde_mast_sig_gns_plts <-stg_strn_mast_gns_smooth_plts(gn_xprsn_tbls = gn_tble_gg_smoother,  
+                                                          gns_strn = map(mast_tde_corr_tbls, 
+                                                                         . %>%
+                                                                           filter(p_val_adj < 0.05 & waldStat > 10) %>%
+                                                                           filter(!str_detect(pw_comparison, 'SC._vs_Lab')) %>%
+                                                                           arrange(desc(waldStat)) %>% 
+                                                                           dplyr::select(gene_id, pw_comparison)), 
+                                                          stage_nms = names(strns_ub_pairwise_mkrs_pt_ml_sst), 
+                                                          ptimes = pts_sst,
+                                                          comp_g = 'pw_comparison',
+                                                          top_gns = 10)
+
+
+
+```
+
+
+Save bordeline significant genes
+```{r}
+stg_strn_mast_gns_smooth_plts_saver(plts_cnm = 'top_tde_mast_sig', plt_lst = top_tde_mast_sig_gns_plts)
+```
+
+#### MAST sig genes with tradeseq smoothened heatmaps 
+
+function for getting genes to plot
+```{r}
+##Function for making table of genes and accompanying annotations for heatmap - table kept out of the plotting functions since we will be modifying it alot and it might be helpful to look at the results before making the heatmap
+# strns_lab_comps <- c('SC2_vs_SC5', 'SC2_vs_SC7', 'SC5_vs_SC7', 'SC2_vs_Lab', 'SC5_vs_Lab', 'SC7_vs_Lab')
+
+## Get all the strains present in the comparisons
+# strns_lab_comps <- c('SC1_vs_SC2', 'SC1_vs_SC3', 'SC1_vs_SC6', 'SC2_vs_SC3', 'SC2_vs_SC5',  'SC2_vs_SC6', 'SC2_vs_SC7', 'SC3_vs_SC6',  'SC5_vs_SC7','SC1_vs_Lab', 'SC2_vs_Lab', 'SC3_vs_Lab',  'SC5_vs_Lab', 'SC6_vs_Lab', 'SC7_vs_Lab')
+# strns_lab_comps <- c("SC1_vs_SC2", "SC1_vs_SC3", "SC1_vs_SC6", "SC2_vs_SC3", "SC2_vs_SC4", "SC2_vs_SC5", "SC2_vs_SC6", "SC2_vs_SC7", "SC3_vs_SC6",  "SC4_vs_SC5", "SC4_vs_SC6",  "SC4_vs_SC7", "SC5_vs_SC6", "SC5_vs_SC7", "SC6_vs_SC7","SC1_vs_Lab", "SC2_vs_Lab", "SC3_vs_Lab", "SC4_vs_Lab", "SC5_vs_Lab", "SC6_vs_Lab", "SC7_vs_Lab")
+
+lfstrains_comps <- strns_comps_w_lab
+
+strn_comps_gns_anno_2_plt = function(
+    pval = 10e-10,
+    wstat= 10,
+    stg_pw_gns = mast_tde_corr_tbls[[1]],
+    avglfc_top = 0.5,
+    avglfc_botom = -0.5,
+    comp_lvls='Field_vs_Lab',
+    sig_strns_annotn_2_keep = 'Field_vs_Lab',
+    strns_annotn_2_omit = 'SC._vs_Lab',
+    nf54_batch_omit = "EMPTY",
+    topgn = 1000000) {
+  
+  gns2plt <- stg_pw_gns %>% 
+    filter(p_val_adj < pval &  (avg_log2FC > avglfc_top | avg_log2FC < avglfc_botom ) & waldStat > wstat) %>% 
+    mutate(lfc_rank = dense_rank(dplyr::desc(abs(avg_log2FC)))) %>%
+    filter(lfc_rank <= topgn) %>% ### !!! NOTE - This will work unpredictably when omitting some comparisons (pw_comparisons) downstream
+    mutate(dir = case_when(avg_log2FC > avglfc_top ~ 'Upregulated', 
+                           avg_log2FC < avglfc_botom ~ 'Downregulated')) %>%
+    mutate(across(dir, ~factor(., levels=c('Upregulated', 'Downregulated')))) %>%
+    dplyr::select(pw_comparison, gene_id, dir) %>% 
+    mutate(across(pw_comparison, ~droplevels(factor(., levels = comp_lvls)))) %>%
+    arrange(pw_comparison, dir) %>%
+    pivot_wider(names_from = 'pw_comparison', values_from = 'dir') %>%
+    filter(if_any(matches(sig_strns_annotn_2_keep), ~!is.na(.))) %>%
+    filter(if_any(-c(matches(strns_annotn_2_omit), matches(nf54_batch_omit), gene_id), ~!is.na(.))) %>%
+    {
+      if(T %in% (str_detect(names(.),strns_annotn_2_omit))) 
+        mutate(.,FieldvsLab_c = case_when(
+          if_any(matches(strns_annotn_2_omit), ~ . == 'Downregulated') & if_any(matches(strns_annotn_2_omit), ~ . == 'Upregulated') ~ 'both',
+          if_any(matches(strns_annotn_2_omit), ~ . == 'Downregulated') ~ 'Downregulated',
+          if_any(matches(strns_annotn_2_omit), ~ . == 'Upregulated') ~ 'Upregulated')) 
+      else 
+        .
+    } %>% 
+    dplyr::select(-c(matches(strns_annotn_2_omit),matches(nf54_batch_omit))) %>%
+    arrange(across(-one_of("gene_id")))%>%
+    column_to_rownames('gene_id')
+  
+  return(gns2plt)
+  
+}
+
+```
+
+
+```{r}
+
+hmap_gn_tbls <- list(mast_tde_corr_tbls, 
+                     c(as.list(rep('Field_vs_Lab', 8)),rep(list(lfstrains_comps), 20)),
+                     c(as.list(rep('Field_vs_Lab', 8)),rep('^[7|N|m[0-9]*_S].*_vs_[7|N|m[0-9]*_S]*', 20))) %>%
+  pmap(#possibly(
+    ~{
+      strn_comps_gns_anno_2_plt(pval = 0.05,
+                                wstat= 10,
+                                stg_pw_gns = ..1,
+                                avglfc_top = 0,
+                                avglfc_botom = -0,
+                                comp_lvls=..2,
+                                sig_strns_annotn_2_keep = ..3,
+                                strns_annotn_2_omit = 'm[0-9]*_SC._vs_[L|N|7].*')
+      
+    }
+    #, 'e')
+  )
+
+
+```
+
+heatmap function
+```{r}
+# sVs_order <- paste0(c('SC1', 'SC2', 'SC3', 'SC4', 'SC5', 'SC6', 'SC7'), ), c('7G8', 'NF54','NF54_A',  'Lab'))
+sVs_order <- strain_dset_lvls_don
+# sVs_order_minus_nf54O <- c('SC1', 'SC2', 'SC3', 'SC4', 'SC5', 'SC6', 'SC7','7G8', 'NF54','Lab')
+sVs_order_minus_nf54O <- strain_dset_lvls_don[!strain_dset_lvls_don %in%"NF54_A"]
+
+##Function for plotting heatmap
+hmap_pw_strns_lab_tde = function(ts_dset= msc_g_noLE_ref_ts_sce_ub_de[[2]],
+                                 gns_tbl = hmap_gn_tbls[[2]],
+                                 cap_no = 7,
+                                 split_col = 'Condition',
+                                 ptime = pts[[2]],
+                                 col_map = strain_cols_n,
+                                 strn_row_anno_order = sVs_order,
+                                 strn_conds = 'Condition',
+                                 pt_labl = 'Pseudotime',
+                                 hmap_mode='seurat_smooth',
+                                 seu_dset = msc_g_noLE_v3_combi_afm_seu_sst[[2]],
+                                 seu_comps = 'dset',
+                                 chunk_size = 0.02,
+                                 rnames = F,
+                                 rsize = 6,
+                                 lgsize = 10, ## legend titles font size (pseudotime & Scaled expression)
+                                 lblsize = 10,
+                                 lg_width = 4,
+                                 csize = 12, ## Column/conditions header font size (strains lab etc)
+                                 anno_fsize = 15,
+                                 anno_trsize = 15,
+                                 strn2dsample = 'Lab',
+                                 shw_anno_head = T,
+                                 shw_left_bar_anno=T,
+                                 botom_pad = 26,
+                                 strain2omit_top_bar = 'Placeholder_when_we_dont_want_to_omit_any_group') {
+  ## If else option to specify the commands based on the selected  heatmap mode - tde_smooth, seurat, seurat_smooth
+  ## tde_smooth - plotting the smoothened tradeseq gene expression from fitting GAMs (generalised additive models)
+  if (hmap_mode == 'tde_smooth') {
+    
+    ##Cells groupings order, pseudotime, points calculation
+    cells_anno = predictSmooth(ts_dset, gene = rownames(gns_tbl), nPoints = 20, tidy = T)  %>% 
+      mutate(point = paste0("point", rep(rep(1:20,length(unique(ts_dset@colData$tradeSeq$conditions))),length(rownames(gns_tbl)))), 
+             lin_id = paste0('lineage', lineage,'_condition', condition, '_',point)) %>%
+      rownames_to_column('No')  %>% 
+      dplyr::select(lin_id,time,condition)%>% 
+      distinct()%>% 
+      column_to_rownames('lin_id') %>%
+      # filter(!str_detect(condition, strain2omit_top_bar)) %>%
+      filter(!(condition %in% strain2omit_top_bar)) %>%
+      rename('Pseudotime' = time, 'Condition' = condition) %>%
+      mutate(across(Condition, ~droplevels(factor(., levels = strn_row_anno_order))))
+    
+    ##Get cells order
+    cells_order <- rownames(cells_anno)
+    
+    ##Order and scale gene expression matrix appropriately
+    xprsn_mtx <- predictSmooth(ts_dset, gene = rownames(gns_tbl), nPoints = 20, tidy = FALSE) %>%
+      .[,cells_order] %>%
+      t() %>%
+      scale() %>% 
+      .[,rownames(gns_tbl)] %>%
+      t() %>% 
+      as.matrix()
+    
+    ## seurat - plotting the raw seurat gene expression
+  } else if (hmap_mode == 'seurat') {
+    
+    cells_anno = seu_dset@meta.data %>% 
+      rownames_to_column('cell_bc') %>%
+      # filter(!str_detect(!!rlang::sym(seu_comps), strain2omit_top_bar))%>%
+      filter(!(!!rlang::sym(seu_comps) %in% strain2omit_top_bar)) %>%
+      mutate(across(!!rlang::sym(seu_comps), ~droplevels(factor(., levels = strn_row_anno_order)))) %>% 
+      arrange(!!rlang::sym(seu_comps), !!rlang::sym(ptime)) %>% 
+      dplyr::add_count(!!rlang::sym(seu_comps), name ='grp_t') %>%  
+      group_by(!!rlang::sym(seu_comps)) %>%
+      mutate(samp = sample(x=n())) %>%
+      ungroup() %>%
+      filter(!(!!rlang::sym(seu_comps) == strn2dsample & samp > min(grp_t))) %>%
+      column_to_rownames('cell_bc') %>%
+      dplyr::select(!!rlang::sym(seu_comps), !!rlang::sym(ptime)) %>%
+      rename('Pseudotime' = !!rlang::sym(ptime), 'Condition' = !!rlang::sym(seu_comps))
+    print('lkl')
+    print(cells_anno %>% dplyr::count(Condition))
+    
+    print('lkl')
+    print(head(rownames(cells_anno)))
+    
+    print('lkl')
+    print(head(cells_anno ))
+    
+    cells_order <- rownames(cells_anno)
+    
+    xprsn_mtx <- seu_dset@assays$RNA@scale.data %>%
+      .[,cells_order] %>%
+      t()  %>% 
+      .[,rownames(gns_tbl)]%>% 
+      t()  %>% 
+      as.matrix()
+    print('lkl')
+    print(dim(cells_anno))
+    print('lkl')
+    print(dim(xprsn_mtx))
+    
+  }
+  
+  ## seurat_smooth - plotting the smoothened seurat gene expression where several cells are grouped together and the mean is calculated. The mean of this group is then used to represent all the cells therein. The group (strain/lab cluster) with the lowest is used to decided the number of chunks to make. These results in the largest cluster being equal to the smallest. - NEED TO CONFIRM IF THIS IS ACCURATE
+  else if (hmap_mode == 'seurat_smooth') {
+    ##Heatmaps with smoothing grouping cells within 0.1 pseudotime values
+    
+    chunked_cells <- seu_dset@meta.data %>% 
+      mutate(ptime_cat = cut(!!rlang::sym(ptime), 
+                             breaks = c(seq(min(!!rlang::sym(ptime)), max(!!rlang::sym(ptime)), chunk_size), max(!!rlang::sym(ptime))), 
+                             right = F, 
+                             include.lowest = T)) %>% 
+      mutate(grp_id = paste0(!!rlang::sym(seu_comps), str_remove_all(ptime_cat, '\\[|\\)'))) %>%
+      # filter(!str_detect(!!rlang::sym(seu_comps), strain2omit_top_bar))%>% 
+      filter(!(!!rlang::sym(seu_comps) %in% strain2omit_top_bar)) %>%
+      mutate(across(grp_id, ~str_replace_all(., ' |,', '_')))%>% 
+      rownames_to_column('cell_bc')
+    
+    
+    ##Prepare the Stage and ptime annotation for the columns ie cell groupings
+    
+    cells_anno = chunked_cells %>% 
+      mutate(across(!!rlang::sym(seu_comps), ~droplevels(factor(., levels = strn_row_anno_order)))) %>% 
+      arrange(!!rlang::sym(seu_comps), !!rlang::sym(ptime))  %>% 
+      group_by(grp_id) %>%
+      mutate(pt_mean = mean(!!rlang::sym(ptime))) %>% 
+      distinct(grp_id, pt_mean, .keep_all = T) %>% 
+      column_to_rownames('grp_id') %>%
+      dplyr::select(!!rlang::sym(seu_comps), pt_mean) %>%
+      rename('Pseudotime' = pt_mean, 'Condition' = !!rlang::sym(seu_comps))
+    
+    cells_order <- rownames(cells_anno)
+    
+    ##Get matrix for counts and convert to dataframe
+    counts_t <-  seu_dset@assays$RNA@scale.data %>% as.matrix() %>% t() %>% as.data.frame() %>% rownames_to_column('cell_bc')
+    
+    xprsn_mtx <- chunked_cells %>% 
+      dplyr::select(cell_bc, grp_id) %>% 
+      left_join(., counts_t, by='cell_bc') %>% 
+      group_by(grp_id) %>% 
+      summarise(across(starts_with('PF3D7'), mean)) %>%
+      column_to_rownames('grp_id') %>%
+      .[,rownames(gns_tbl)]%>%
+      t()  %>%
+      .[,cells_order] %>%
+      as.matrix()
+    
+    # Troubleshooting
+    # print(dim(cells_anno))
+    # print(dim(xprsn_mtx))
+    
+    # print(head(rownames(cells_anno)))
+    # print(head(colnames(xprsn_mtx)))
+    
+  }
+  
+  
+  
+  ##Cells annotation
+  ##Pseudotime bar color function
+  ptime_color_func = colorRamp2(breaks = c(min(cells_anno[cells_order, 'Pseudotime']), 
+                                           max(cells_anno[cells_order, 'Pseudotime'])), 
+                                colors=c("white",  "#004225"))
+  
+  ##Combine cells annotation (strains/conditions and pseudotime) colors
+  column_ha = HeatmapAnnotation(df = cells_anno[cells_order, , drop = FALSE] %>% 
+                                  dplyr::select(strn_conds, pt_labl),
+                                col = c(list(cells_anno[cells_order, , drop = FALSE] %>% 
+                                               pull(!!rlang::sym(strn_conds)) %>% 
+                                               unique()%>% 
+                                               as.character() %>% 
+                                               col_map[.]) %>% set_names(strn_conds),
+                                        list(ptime_color_func) %>% set_names(pt_labl)
+                                ),
+                                show_legend= list(F) %>% set_names(strn_conds) %>% unlist(),
+                                # annotation_legend_param = list(list(direction = "horizontal")) %>% set_names(pt_labl),
+                                annotation_legend_param = list(list(direction = "horizontal", 
+                                                                    title_gp=gpar(fontsize = lgsize), 
+                                                                    labels_gp = gpar(fontsize = lblsize),
+                                                                    legend_width = unit(4.5, "cm"),
+                                                                    labels_rot = 90)) %>%
+                                  set_names(pt_labl),
+                                annotation_name_gp = gpar(fontsize = anno_trsize, fontface = "bold"),
+                                show_annotation_name = shw_anno_head#,
+                                # list(anno_block(labels = strn_row_anno_order %>% str_replace(., "train ", "") ) %>% set_names(strn_conds))
+                                
+  )
+  
+  ##Genes annotation colors
+  ##Bar coloring
+  row_ha = rowAnnotation(df = gns_tbl[rownames(xprsn_mtx),colnames(gns_tbl), drop = FALSE],
+                         col = rep(list(c('Upregulated' = '#e7a06b', 'Downregulated' = '#9cb4cf' , 'both' = '#7068af')),  # #9bbbe0 	#e0c09b #7068af '#BF4184' '#0079C1' '#9E384D' '#E976A8' '#FF8040' '#A65100'
+                                   each = length(colnames(gns_tbl)))%>% 
+                           set_names( colnames(gns_tbl)),
+                         # annotation_legend_param = rep(list(list(
+                         #   title = "Direction",
+                         #   labels = c('Upregulated', 'Downregulated', 'both'),
+                         #   at = c('Upregulated', 'Downregulated', 'both')
+                         # )), times=length(colnames(gns_tbl[rownames(xprsn_mtx),colnames(gns_tbl), drop = FALSE])))%>% set_names( colnames(gns_tbl[rownames(xprsn_mtx),colnames(gns_tbl), drop = FALSE]))
+                         show_legend= rep(F, times = length(colnames(gns_tbl))) %>% set_names(colnames(gns_tbl)[1:length(colnames(gns_tbl))]),
+                         # show_legend= rep(F, times = length(colnames(gns_tbl))-1) %>% set_names(colnames(gns_tbl)[2:length(colnames(gns_tbl))]),
+                         annotation_name_gp = gpar(fontsize = anno_fsize, fontface = "bold"),
+                         show_annotation_name = shw_left_bar_anno
+  )
+  
+  xprsn_mtx %>%
+    Heatmap(.,
+            cluster_columns = F,
+            show_column_names = F,
+            cluster_rows = F,
+            row_labels = Pf3D7_genes_plasmoDB %>%
+              left_join(data.frame(gene_id=rownames(xprsn_mtx)), ., by=c('gene_id')) %>%  pull(Gene),
+            show_row_names = {{rnames}},
+            left_annotation = row_ha,
+            top_annotation = column_ha,
+            column_split = cells_anno[cells_order,split_col],
+            use_raster = F,
+            # heatmap_legend_param = list(direction = "horizontal", legend_gp = gpar(fontsize = lgsize)),
+            heatmap_legend_param = list(direction = "horizontal", 
+                                        title_gp = gpar(fontsize = lgsize),
+                                        labels_gp = gpar(fontsize = lblsize),
+                                        labels_rot = 90,
+                                        # grid_width = unit(6, "mm"),
+                                        legend_width = unit(lg_width, "cm")),
+            row_names_gp = grid::gpar(fontsize = rsize),
+            # column_labels = strn_row_anno_order %>% str_replace(., "train", "") %>% set_names(strn_row_anno_order),
+            column_title_gp = gpar(fontsize = csize, fontface = "bold"),
+            # column_title_rot = 90,
+            name = "Scaled expression"
+    ) %>%
+    ##Merging legends into 1 column. Could be set to F
+    draw(.,newpage = F, merge_legends = T, heatmap_legend_side = "bottom", annotation_legend_side = "bottom", padding = unit(c(botom_pad, 2, 2, 2), "mm"))
+}
+
+```
+
+
+All sig genes MAST padj <0.05 and tradeseq waldstat 10
+Tradeseq smooth
+NB!!! - RRERUNNING TRADESEQ TO CHANGE CONDITION NAMES SHOULD SORT THE ERROR IN TRADESEQ PLOTS
+```{r}
+
+
+fVl_order <- c('Field', 'Lab')
+
+hmap_gn_tbls <- list(mast_tde_corr_tbls, 
+                     c(as.list(rep('Field_vs_Lab', 8)),rep(list(lfstrains_comps), 20)),
+                     c(as.list(rep('Field_vs_Lab', 8)),rep('^[7|N|S].*_vs_[7|N|S]*', 20))
+                     # c(as.list(rep('Field_vs_Lab', 8)),rep('^[7|N|m[0-9]*_S].*_vs_[7|N|m[0-9]*_S]*',8))
+                     ) %>%
+  pmap(#possibly(
+    ~{
+    strn_comps_gns_anno_2_plt(pval = 0.05, 
+                              wstat= 10,
+                              stg_pw_gns = ..1,
+                              avglfc_top = 0,
+                              avglfc_botom = -0,
+                              comp_lvls=..2,
+                              sig_strns_annotn_2_keep = ..3,
+                              # strns_annotn_2_omit = 'm[0-9]*_SC._vs_[L|N|7].*',
+                              # strns_annotn_2_omit = 'SC._vs_[L|N|7].*', ##Retain FieldvsLab_c which adds left bar annotation for field combined versus lab combined
+                              strns_annotn_2_omit = 'SC._vs_[L|N|7].*|FieldvsLab_c', ##Remove FieldvsLab_c which adds left bar annotation for field combined versus lab combined
+                              nf54_batch_omit='^.*_vs_NF54_A')
+    
+  }
+  # , 'e')
+  )
+
+list(msc_g_noLE_ref_ts_sce_ub_de, 
+     hmap_gn_tbls, 
+     pts_sst, 
+     c(rep(list(fVl_order), 8),rep(list(sVs_order), 20)),
+     c(rep(list(fvl_cols), 8),rep(list(strain_dset_lvls_don_col), 20)),
+     rep(c(F), 28), 
+     rep(c(8), 28),
+     rep(13, 28)) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 20,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='tde_smooth',
+                            rnames = ..6,
+                            rsize = ..7,
+                            anno_fsize = ..8)}
+     , 'e')
+  )
+```
+
+Raw seurat log normalised and scaled
+In the field versus lab, the field is separated into distinct strains for heatmap visualization but the analysis is for bulk field versus lab - need to confirm
+```{r, fig.height=5, fig.width=7}
+
+list(msc_g_noLE_ref_ts_sce_ub_de[9:28], 
+     hmap_gn_tbls[9:28], 
+     c(pts_sst[9:28]), 
+     c(rep(list(sVs_order), 20)),
+     c(rep(list(strain_dset_lvls_don_col), 20)),
+     c(msc_g_noLE_v3_combi_afm_seu_sst[9:28]),
+     rep('strain_dset', 20),
+     c(rep(c(0.02,0.1), 1), rep(0.02, 18)),
+     c(rep(c(F), 18), rep(c(T), 2)), 
+     c(rep(c(6,10), 1), rep(c(8), 18)), 
+     rep(c(15), 20),
+     rep(13, 20)
+)%>%
+  pmap(
+    possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 20,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            csize  = ..11,
+                            anno_fsize = ..12,
+                            strn2dsample = 'Lab')}
+    , 'e')
+  )
+
+```
+
+
+
+In the field versus lab, the field strains are grouped into field for heatmap visualization recapitulating the analysis which is for bulk field versus lab - need to confirm
+- doesnt include field vs lab on left bars in strain comps
+```{r, fig.width=8, fig.height=4.5}
+
+all_labvfld_hms<- list(msc_g_noLE_ref_ts_sce_ub_de, 
+     hmap_gn_tbls, 
+     pts_sst, 
+     c(rep(list(fVl_order), 8),rep(list(sVs_order), 20)),
+     c(rep(list(fvl_cols), 8),rep(list(strain_dset_lvls_don_col), 20)),
+     c(msc_g_noLE_v3_combi_afm_seu_sst),
+     c(rep('dset', 8), rep('lf_strain', 20)),
+     rep(c(0.02), 28),
+     c(rep(F, 8), rep(F, 20)), 
+     c(6,10,8,8,8,10,10,10,9,10,8,10,10,10,9,10,10,10,9,10,10,10,9,10,10,10,9,10),
+     c(rep(16, 8),rep(15, 20)),
+     c(rep(F, 8),rep(F, 20)),
+     c(rep(F, 8),rep(T, 20)),
+     c(rep(14.5, 8),rep(14, 20)),
+     c(rep(14.5, 8),rep(13, 20)),
+     c(rep(16, 8),rep(15, 20)),
+     c(rep(0.4, 8),rep(18, 20)),
+     c(rep('', 8), rep('NF54_A', 20))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 20,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            shw_anno_head = ..12,
+                            shw_left_bar_anno = ..13,
+                            lgsize = ..14,
+                            lblsize = ..15,
+                            strn2dsample = 'Lab',
+                            csize = ..16,
+                            botom_pad = ..17,
+                            strain2omit_top_bar = ..18)}
+    , 'e')
+  )
+
+all_labvfld_hms
+```
+
+Saame as above but only for the donor strains and with gene names
+```{r, fig.width=8, fig.height=4.5}
+don_objs <- names(msc_g_noLE_ref_ts_sce_ub_de)[str_detect(names(msc_g_noLE_ref_ts_sce_ub_de), "_don$")]
+
+all_labvfld_hms_w_gns_labl<- list(msc_g_noLE_ref_ts_sce_ub_de[don_objs], 
+     hmap_gn_tbls[don_objs], 
+     pts_sst[1:8], 
+     c(rep(list(sVs_order), 8)),
+     c(rep(list(strain_dset_lvls_don_col), 8)),
+     c(msc_g_noLE_v3_combi_afm_seu_sst[str_remove(don_objs, "lf_StrainsDE_")]),
+     rep('lf_strain', 8),
+     rep(c(0.02), 8),
+     rep(T, 8), 
+     rep(11, 8),
+     c(rep(14, 8)),
+     c(rep(F, 8)),
+     c(rep(T, 8)),
+     c(rep(11, 8)),
+     c(rep(11, 8)),
+     c(rep(2.8, 8)),
+     c(rep(15, 8)),
+     c(rep(18, 8)),
+     c(rep('', 8))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 20,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            shw_anno_head = ..12,
+                            shw_left_bar_anno = ..13,
+                            lgsize = ..14,
+                            lblsize = ..15,
+                            lg_width = ..16,
+                            strn2dsample = 'Lab',
+                            csize = ..17,
+                            botom_pad = ..18,
+                            strain2omit_top_bar = ..19)}
+    , 'e')
+  )
+
+all_labvfld_hms_w_gns_labl
+```
+
+```{r}
+## Make plots similar to above but without nf54VS7g8
+hmap_gn_tbls_no_lab <- list(mast_tde_corr_tbls[9:28], 
+                     c(rep(list(lfstrains_comps), 20)),
+                     c(rep('^[7|N|S].*_vs_[7|N|S]*', 20))
+                     # c(as.list(rep('Field_vs_Lab', 8)),rep('^[7|N|m[0-9]*_S].*_vs_[7|N|m[0-9]*_S]*',8))
+                     ) %>%
+  pmap(#possibly(
+    ~{
+    strn_comps_gns_anno_2_plt(pval = 0.05, 
+                              wstat= 10,
+                              stg_pw_gns = ..1,
+                              avglfc_top = 0,
+                              avglfc_botom = -0,
+                              comp_lvls=..2,
+                              sig_strns_annotn_2_keep = ..3,
+                              # strns_annotn_2_omit = 'm[0-9]*_SC._vs_[L|N|7].*',
+                              # strns_annotn_2_omit = 'SC._vs_[L|N|7].*', ##Retain FieldvsLab_c which adds left bar annotation for field combined versus lab combined
+                              strns_annotn_2_omit = 'SC._vs_[L|N|7].*|FieldvsLab_c|NF54_vs_7G8', ##Remove FieldvsLab_c which adds left bar annotation for field combined versus lab combined
+                              nf54_batch_omit='^.*_vs_NF54_A')
+    
+  }
+  # , 'e')
+  )
+
+all_labvfld_hms_no_lab<- list(msc_g_noLE_ref_ts_sce_ub_de[9:28], 
+     hmap_gn_tbls_no_lab, 
+     pts_sst[9:28], 
+     c(rep(list(sVs_order), 20)),
+     c(rep(list(strain_dset_lvls_don_col), 20)),
+     c(msc_g_noLE_v3_combi_afm_seu_sst[9:28]),
+     c(rep('lf_strain', 20)),
+     rep(c(0.02), 20),
+     c(rep(F, 20)), 
+     c(9,10,8,10,10,10,9,10,10,10,9,10,10,10,9,10,10,10,9,10),
+     c(rep(15, 20)),
+     c(rep(F, 20)),
+     c(rep(T, 20)),
+     c(rep(14, 20)),
+     c(rep(13, 20)),
+     c(rep(15, 20)),
+     c(rep(17.5, 20)),
+     rep(list(c('NF54_A', 'NF54', '7G8')), 20)) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 20,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            shw_anno_head = ..12,
+                            shw_left_bar_anno = ..13,
+                            lgsize = ..14,
+                            lblsize = ..15,
+                            strn2dsample = 'Lab',
+                            csize = ..16,
+                            botom_pad = ..17,
+                            strain2omit_top_bar = ..18)}
+    , 'e')
+  )
+
+all_labvfld_hms_no_lab
+
+```
+
+### Genetic distance (IBD) and number of DE genes correlation - START
+```{r, eval=T}
+# wdir<- '/Users/jr35/Google Drive/My Drive/PHD_documents/sware/hmmIBD-master'
+ss_afm_pf7M_cln_gt_hmmibd_f <- map("msc14.strain_qcd", ~read_delim(paste0('data/processed/ibd/', .x, '.hmm_fract.txt'))) 
+
+
+```
+
+```{r, eval=T}
+## Remove SC8 from the msc14 results
+# ss_afm_pf7M_cln_gt_hmmibd_f_m14 <- ss_afm_pf7M_cln_gt_hmmibd_f[[8]] %>% filter(sample1 != "SC8" & sample2 != "SC8" )
+ss_afm_pf7M_cln_gt_hmmibd_f_m14 <- ss_afm_pf7M_cln_gt_hmmibd_f[[1]]
+
+```
+
+```{r, fig.width= 12, fig.height=4, eval=T}
+##read in IBD estimates and create id for the strain comparisons
+ss_afm_pf7M_cln_gt_hmmibd_f_m14 <- ss_afm_pf7M_cln_gt_hmmibd_f_m14 %>% mutate(pw_comp = paste(sample1, sample2, sep = '_vs_'))
+
+##Get the numbers of parasites per stage between strains
+strn_no <-msc_gcombi_noLE_sub_sce[c("MSC14_f", "MSC14_f_don3")] %>% map(., ~.x@colData[, c('strain')] %>% table() %>% data.frame()) %>% bind_rows(., .id = 'stage') %>% dplyr::rename('strn'='.', 'count'='Freq') %>% 
+  mutate(across(strn, ~str_remove(., "M14_")),
+         id = paste0(stage, '_', strn)) %>% 
+  data.frame()
+
+
+##get the number of genes that are DE for each pair of strains for each stage and merge in IBD results and plot
+pw_comp_de_gns <- hmap_gn_tbls[c("lf_StrainsDE_MSC14_f","lf_StrainsDE_MSC14_f_don3")] %>% 
+  map(., ~rownames_to_column(., 'gn')) %>% 
+  bind_rows(., .id = 'stage') %>% 
+  pivot_longer(cols = starts_with('SC'), names_to = 'pw_comp', values_to = 'de_dir', values_drop_na = T) %>% 
+  dplyr::count(stage,  pw_comp) %>% 
+  separate_wider_delim(., pw_comp, names=(c('strn1', 'strn2')), delim = '_vs_', cols_remove = F) %>% 
+  mutate(across(stage, ~str_remove(., 'lf_StrainsDE_')), id1 = paste0(stage, '_', strn1), id2 = paste0(stage, '_', strn2)) %>% 
+  ##Add the number of genes per minimum cell - to account for every cell number
+  left_join(.,strn_no[, c('count', 'id')], by=c('id1'= 'id')) %>% 
+  left_join(.,strn_no[, c('count', 'id')], by=c('id2'= 'id'), suffix = c('_1', '_2')) %>% 
+  mutate(min_cnt = pmin(count_1, count_2), de_gns_pcell_min = n/min_cnt) %>% 
+  rowwise() %>%
+  mutate(sum_cnt = sum(count_1, count_2), de_gns_pcell_sum = n/sum_cnt)
+
+##Plot of DE genes correlation with IBD accounting for parasites numbers
+pw_comp_de_gns %>% left_join(., ss_afm_pf7M_cln_gt_hmmibd_f_m14, by='pw_comp')  %>% 
+  mutate(across(stage, ~str_replace_all(., c('fh'='Female (HE)', 'fl' = 'Female (LE)'))),
+         pw_comp_no = paste0(sample1,'(',count_1,')',' vs ',sample2,'(',count_2,')',' [', n,']'))%>%
+  ggplot(., aes(x=fract_sites_IBD, y=de_gns_pcell_min )) + 
+  geom_line()+ 
+  geom_point()+ 
+  geom_text_repel(aes(label = pw_comp_no, color=pw_comp), size = 6) +
+  facet_wrap(.~stage,  scales = 'free_y') +
+  theme_bw() +
+  stat_cor(method = "pearson", label.x = 0, label.y = .25, size = 6)+
+  labs(y='DE genes per least\nabundant cell in comparison', x='IBD genome proportion', color = 'Pairwise\ncomparison')+
+  theme(axis.title = element_text(size =16),
+        axis.text = element_text(size =15),
+        strip.text =element_text(size=16,face="bold"),
+        legend.title = element_text(size =13),
+        legend.text = element_text(size =12),
+        legend.position = 'None')
+
+
+```
+
+### Genetic distance (IBD) and number of DE genes correlation - END
+
+Raw seurat log normalised and scaled
+field vs lab MAST results visualized with field split by strains 
+```{r}
+## MAST Pvalue thresholds all field versus lab pval < 10e-10 and each strain versus field pval<0.05 
+mast_tde_corr_tbls_fVl_fg <-list(mast_tde_corr_tbls[1:8], mast_tde_corr_tbls[9:16]) %>% pmap(~left_join(..1 %>% filter(p_val_adj < 0.05), ..2 %>% filter(p_val_adj < 0.05) %>% dplyr::select(gene_id, pw_comparison), by = 'gene_id') %>% pivot_longer(cols = c('pw_comparison.x', 'pw_comparison.y'), names_to = 'pw_class', values_to = 'pw_comparison' ) %>% distinct())
+
+hmap_gn_sVl_tbls <- list(mast_tde_corr_tbls_fVl_fg) %>%
+  pmap(~{
+    ..1 %>%
+      filter(p_val_adj < 0.05 &  (avg_log2FC > 0 | avg_log2FC < -0 ) & waldStat > 10) %>% 
+      mutate(dir = case_when(avg_log2FC > 0 ~ 'Upregulated', 
+                             avg_log2FC < -0 ~ 'Downregulated')) %>%
+      mutate(across(dir, ~factor(., levels=c('Upregulated', 'Downregulated')))) %>%
+      dplyr::select(pw_comparison, gene_id, dir) %>% 
+      mutate(across(pw_comparison, ~factor(., levels = c('Field_vs_Lab', 'SC2_vs_Lab', 'SC5_vs_Lab', 'SC7_vs_Lab')))) %>%
+      arrange(pw_comparison, dir) %>%
+      filter(!is.na(pw_comparison)) %>%
+      pivot_wider(names_from = 'pw_comparison', values_from = 'dir') %>%
+      filter(if_any(matches('.*_vs_Lab'), ~!is.na(.))) %>%
+      {
+        if(T %in% (str_detect(names(.),'SC._vs_SC.'))) 
+          mutate(.,FieldvsLab_c = case_when(
+            if_any(contains('Lab'), ~ . == 'Downregulated') & if_any(contains('Lab'), ~ . == 'Upregulated') ~ 'both',
+            if_any(contains('Lab'), ~ . == 'Downregulated') ~ 'Downregulated',
+            if_any(contains('Lab'), ~ . == 'Upregulated') ~ 'Upregulated')) 
+        else 
+          .
+      } %>% 
+      dplyr::select(-c(matches('SC._vs_SC.'))) %>%
+      arrange(across(-one_of("gene_id")))%>%
+      column_to_rownames('gene_id') })
+
+list(msc_g_noLE_ref_ts_sce_ub_de[1:8], 
+     hmap_gn_sVl_tbls, 
+     pts_sst[1:8], 
+     rep(list(sVs_order), 8),
+     rep(list(strain_dset_lvls_don_col), 8),
+     msc_g_noLE_v3_combi_afm_seu_sst[1:8],
+     rep('strain_dset', 8),
+     c(0.02, 0.1, 0.02, 0.1, 0.02, 0.1, 0.02,0.1),
+     c(F, F, F, F, F, F, F, F), 
+     c(6, 10, 6, 10, 6, 10, 6, 10),
+     c(rep(13, 8))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 25,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            strn2dsample = 'Lab')}
+    , 'e')
+  )
+```
+
+All significant? Raw seurat log normalised and scaled -include field vs lab on left bars in strain comps - IN PAPER SUPPLEMENTARY
+```{r, fig.height=5, fig.width=7}
+## MAST Pvalue thresholds all field versus lab pval < 10e-10 and each strain versus field pval<0.05 
+# mast_tde_corr_tbls_fVl_fg <-list(mast_tde_corr_tbls[6:10], mast_tde_corr_tbls[1:5]) %>% pmap(~left_join(..1 %>% filter(p_val_adj < 0.05), ..2 %>% filter(p_val_adj < 0.05) %>% dplyr::select(gene_id, pw_comparison, avg_log2FC, p_val_adj), by = 'gene_id') %>% pivot_longer(cols = c('pw_comparison.x', 'pw_comparison.y'), names_to = 'pw_class', values_to = 'pw_comparison' ) %>% distinct())
+
+## !!! Combining the results from field versus Lab DE to those of the field strain_vs_strain DE so that we can visualize the field versus lab DE alongside strain DE
+
+mast_tde_corr_tbls_fVl_fg <- list(mast_tde_corr_tbls[9:16], mast_tde_corr_tbls[1:8]) %>% 
+  pmap(~left_join(..1%>% filter(p_val_adj < 0.05), 
+                  ..2 %>% filter(p_val_adj < 0.05) %>% dplyr::select(gene_id, pw_comparison, avg_log2FC,waldStat, p_val_adj),  
+                  by = 'gene_id', 
+                  suffix = c('_fVSlab', '_sVSs'))%>% 
+         pivot_longer(.,cols = starts_with(c('pw_comparison', 'waldStat','p_val_adj', 'avg_log2FC')), names_pattern = "(.*).(.VS.*$)", names_to = c( ".value", "f_strains_v_lab")) 
+  )
+
+hmap_gn_sVl_tbls <- list(mast_tde_corr_tbls_fVl_fg) %>%
+  pmap(~{
+    ..1 %>%
+      filter(p_val_adj < 0.05 &  (avg_log2FC > 0 | avg_log2FC < -0 ) & waldStat > 10) %>% 
+      mutate(dir = case_when(avg_log2FC > 0 ~ 'Upregulated', 
+                             avg_log2FC < -0 ~ 'Downregulated')) %>%
+      mutate(across(dir, ~factor(., levels=c('Upregulated', 'Downregulated')))) %>%
+      dplyr::select(pw_comparison, gene_id, dir) %>% 
+      filter(!str_detect(pw_comparison, 'SC._vs_Lab')) %>% 
+      mutate(across(pw_comparison, ~droplevels(factor(., levels = c(strns_lab_comps, 'Field_vs_Lab'))))) %>%
+      distinct() %>%
+      arrange(pw_comparison, dir) %>%
+      filter(!is.na(pw_comparison)) %>%
+      pivot_wider(names_from = 'pw_comparison', values_from = 'dir') %>%
+      filter(if_any(matches('SC._vs_SC.'), ~!is.na(.))) %>%
+      # {
+      #     if(T %in% (str_detect(names(.),'SC._vs_Lab'))) 
+      #         mutate(.,FieldvsLab_c = case_when(
+      #             if_any(contains('Lab'), ~ . == 'Downregulated') & if_any(contains('Lab'), ~ . == 'Upregulated') ~ 'both',
+      #             if_any(contains('Lab'), ~ . == 'Downregulated') ~ 'Downregulated',
+      #             if_any(contains('Lab'), ~ . == 'Upregulated') ~ 'Upregulated')) 
+      #     else 
+      #         .
+      # } %>% 
+      dplyr::select(-c(matches('SC._vs_Lab'))) %>%
+      arrange(across(-one_of("gene_id")))%>%
+      column_to_rownames('gene_id') })
+
+all_strn_fld_hms <- list(msc_g_noLE_ref_ts_sce_ub_de[1:8], 
+     hmap_gn_sVl_tbls, 
+     pts_sst[1:8], 
+     rep(list(sVs_order), 8),
+     rep(list(strain_dset_lvls_don_col), 8),
+     msc_g_noLE_v3_combi_afm_seu_sst[1:8],
+     rep('strain_dset', 8),
+     c(0.02, 0.1, 0.02, 0.1, 0.02, 0.1, 0.02,0.1),
+     c(F, F, F, F, F, F, F, F), 
+     c(6, 10, 6, 10, 6, 10, 6, 10),
+     c(rep(19, 8)),
+     c(rep(F, 8)),
+     c(rep(16, 8)),
+     c(rep(16, 8)),
+     c(rep(17, 8)),
+     c(rep(16, 8))) %>%
+  pmap(
+     possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 25,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            shw_anno_head = ..12,
+                            strn2dsample = 'Lab',
+                            # rsize = 6,
+                            lgsize = ..13,
+                            lblsize = ..14,
+                            csize = ..15,
+                            anno_trsize = ..16,
+                            botom_pad = 21)}
+     , 'e')
+  )
+
+all_strn_fld_hms
+```
+
+
+
+Top MAST genes table (avglfc_top >1.5 and avglfc_top <-1.5)
+tradeseq smooth
+```{r}
+
+# sVs_order <- c('Strain 0', 'Strain 1', 'Strain 2', 'Lab')
+fVl_order <- c('Field', 'Lab')
+
+hmap_gn_tbls_lfc1.5 <- list(mast_tde_corr_tbls, 
+                     c(as.list(rep('Field_vs_Lab', 8)),rep(list(lfstrains_comps), 20)),
+                     c(as.list(rep('Field_vs_Lab', 8)),rep('^[7|N|S].*_vs_[7|N|S]*', 20)))%>%
+  pmap(possibly(~{
+    strn_comps_gns_anno_2_plt(#pval = 1e-10, 
+                              pval = 0.05,
+                              wstat= 10,
+                              stg_pw_gns = ..1,
+                              avglfc_top = 1.5,
+                              avglfc_botom = -1.5,
+                              comp_lvls=..2,
+                              sig_strns_annotn_2_keep = ..3,
+                              strns_annotn_2_omit = 'SC._vs_[L|N|7].*')
+    
+  }
+  , 'e')
+  )
+
+list(msc_g_noLE_ref_ts_sce_ub_de, 
+     hmap_gn_tbls, 
+     pts_sst, 
+     c(rep(list(fVl_order), 8),rep(list(sVs_order), 20)),
+     c(rep(list(fvl_cols), 8),rep(list(strain_dset_lvls_don_col), 20)),
+     c(F,F,F,F,F,T,T,T,T,T,F,T,T,T,T,T,T,T,T,T, rep(T,8)), 
+     c(6,10,8,8,8,10,10,10,9,10,8,10,10,10,9,10,10,10,9,10, rep(9,8)),
+     c(rep(13, 8),rep(13, 20))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 20,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='tde_smooth',
+                            rnames = ..6,
+                            rsize = ..7,
+                            anno_fsize = ..8)}
+    , 'e')
+  )
+```
+
+
+
+Top average log 2 FC (>1.5 and <1.5) genes Raw counts - no smoothing -No Field vs lab comparison on bars in the left of strain De plots
+Field vs lab comparisons - Field not split by strain
+Raw Seurat log normalised and scaled 
+
+```{r}
+
+list(c(msc_g_noLE_ref_ts_sce_ub_de[1:4], msc_g_noLE_ref_ts_sce_ub_de), 
+     c(hmap_gn_tbls_lfc1.5[1:4], hmap_gn_tbls_lfc1.5), 
+     c(pts_sst[1:4], pts_sst), 
+     c(rep(list(fVl_order), 4),rep(list(sVs_order), 28)),
+     c(rep(list(fvl_cols), 4),rep(list(strain_dset_lvls_don_col), 28)),
+     c(msc_g_noLE_v3_combi_afm_seu_sst[1:4], msc_g_noLE_v3_combi_afm_seu_sst),
+     c(rep('dset', 2),rep('strain_dset', 2),rep('lf_strain', 28)),
+     c(0.02,0.1,0.02,0.02,0.02,0.02,0.1,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02, rep(0.02,8)),
+     c(F,F,F,F,F,F,rep(T,26)), 
+     c(6,10,8,8,8,10,10,10,8.2,10,10,8,10,10,10,8.2,10,10,8,8,10,10,8,8, rep(9,8)),
+     c(rep(13, 4),rep(13, 28))) %>%
+  pmap(
+    possibly(
+      ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                              gns_tbl=..2,
+                              cap_no = 20,
+                              split_col = 'Condition',
+                              ptime = ..3,
+                              strn_row_anno_order = ..4,
+                              col_map = ..5,
+                              strn_conds = 'Condition',
+                              pt_labl = 'Pseudotime',
+                              hmap_mode='seurat',
+                              seu_dset = ..6,
+                              seu_comps = ..7,
+                              chunk_size = ..8,
+                              rnames = ..9,
+                              rsize = ..10,
+                              anno_fsize = ..11,
+                              strn2dsample = 'Lab')}
+      , 'e')
+  )
+
+
+```
+
+Field vs lab comparisons - Field split by strain
+Same as above just field stratified by strain in field by lab comparisons
+Top MAST genes table (avglfc_top >1.5 and avglfc_top <-1.5) - no gene annotations
+```{r}
+
+list(msc_g_noLE_ref_ts_sce_ub_de[1:8], 
+     hmap_gn_tbls_lfc1.5[1:8], 
+     c(pts_sst[1:8]), 
+     c(rep(list(sVs_order), 8)),
+     c(rep(list(strain_dset_lvls_don_col), 8)),
+     c(msc_g_noLE_v3_combi_afm_seu_sst [1:8]),
+     c(rep('strain_dset', 8)),
+     c(0.02, 0.1, 0.02, 0.1, 0.02, 0.1, 0.02,0.1),
+     c(F, F, F, F, F, F, F, F), 
+     c(6, 10, 6, 10, 6, 10, 6, 10),
+     c(rep(13, 8))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 20,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            strn2dsample = 'Lab')}
+    , 'e')
+  )
+```
+
+Top MAST genes table (avglfc_top >1.5 and avglfc_top <-1.5)
+Heatmap with custom mean smoothing
+```{r, eval=FALSE}
+### NB TAKES LOOOONG
+list(c(msc_g_noLE_ref_ts_sce_ub_de[1:8],msc_g_noLE_ref_ts_sce_ub_de), 
+     c(hmap_gn_tbls_lfc1.5[1:8], hmap_gn_tbls_lfc1.5), 
+     c(pts_sst[1:8], pts_sst), 
+     c(rep(list(fVl_order), 8),rep(list(sVs_order), 20)),
+     c(rep(list(fvl_cols), 8),rep(list(strain_dset_lvls_don_col), 20)),
+     c(msc_g_noLE_v3_combi_afm_seu_sst[1:8], msc_g_noLE_v3_combi_afm_seu_sst),
+     c(rep('dset', 8),rep('strain_dset', 4),rep('lf_strain', 20)),
+     c(0.02,0.1,0.02,0.02,0.02,0.02,0.1,0.1,rep(0.02,16)),
+     c(F,F,F,F,F,F,rep(T,18)), 
+     c(6,10,8,8,8,10,10,10,8.2,10,10,8,10,10,10,8.2,10,10,8,8,10,10,8,8),
+     c(rep(13, 8),rep(13, 20))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 20,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat_smooth',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11)}
+    , 'e')
+  )
+```
+
+Top MAST genes table (avglfc_top >1.5 and avglfc_top <-1.5) - includes Field vs lab aggregate - FIELD VS LAB JUST ADDED FOR genes that pass cut off for STRAIN VS STRAIN COMPARISON to see how they compare to lab. 
+Field VS lab comparison is all combined field cells versus the lab done statistically- Need to check on this clearly
+```{r}
+## MAST Pvalue thresholds all field versus lab pval < 10e-10 and each strain versus field pval<0.05 
+# mast_tde_corr_tbls_fVl_fg <-list(mast_tde_corr_tbls[6:10], mast_tde_corr_tbls[1:5]) %>% pmap(~left_join(..1 %>% filter(p_val_adj < 0.05), ..2 %>% filter(p_val_adj < 0.05) %>% dplyr::select(gene_id, pw_comparison, avg_log2FC, p_val_adj), by = 'gene_id') %>% pivot_longer(cols = c('pw_comparison.x', 'pw_comparison.y'), names_to = 'pw_class', values_to = 'pw_comparison' ) %>% distinct())
+
+mast_tde_corr_tbls_fVl_fg <- list(mast_tde_corr_tbls[9:16], mast_tde_corr_tbls[1:8]) %>% 
+  pmap(~left_join(..1%>% filter(p_val_adj < 0.05), 
+                  ..2 %>% filter(p_val_adj < 0.05) %>% dplyr::select(gene_id, pw_comparison, avg_log2FC,waldStat, p_val_adj),  
+                  by = 'gene_id', 
+                  suffix = c('_fVSlab', '_sVSs'))%>% 
+         pivot_longer(.,cols = starts_with(c('pw_comparison', 'waldStat','p_val_adj', 'avg_log2FC')), names_pattern = "(.*).(.VS.*$)", names_to = c( ".value", "f_strains_v_lab")) 
+  )
+
+hmap_gn_sVl_tbls <- list(mast_tde_corr_tbls_fVl_fg) %>%
+  pmap(~{
+    ..1 %>%
+      filter(p_val_adj < 1e-10 &  (avg_log2FC > 1.5 | avg_log2FC < -1.5 ) & waldStat > 10) %>% 
+      mutate(dir = case_when(avg_log2FC > 1.5 ~ 'Upregulated', 
+                             avg_log2FC < -1.5 ~ 'Downregulated')) %>%
+      mutate(across(dir, ~factor(., levels=c('Upregulated', 'Downregulated')))) %>%
+      dplyr::select(pw_comparison, gene_id, dir) %>% 
+      filter(!str_detect(pw_comparison, 'SC._vs_Lab')) %>% 
+      mutate(across(pw_comparison, ~droplevels(factor(., levels = c(strns_lab_comps, 'Field_vs_Lab'))))) %>%
+      distinct() %>%
+      arrange(pw_comparison, dir) %>%
+      filter(!is.na(pw_comparison)) %>%
+      pivot_wider(names_from = 'pw_comparison', values_from = 'dir') %>%
+      filter(if_any(matches('SC._vs_SC.'), ~!is.na(.))) %>%
+      # {
+      #     if(T %in% (str_detect(names(.),'SC._vs_Lab'))) 
+      #         mutate(.,FieldvsLab_c = case_when(
+      #             if_any(contains('Lab'), ~ . == 'Downregulated') & if_any(contains('Lab'), ~ . == 'Upregulated') ~ 'both',
+      #             if_any(contains('Lab'), ~ . == 'Downregulated') ~ 'Downregulated',
+      #             if_any(contains('Lab'), ~ . == 'Upregulated') ~ 'Upregulated')) 
+      #     else 
+      #         .
+      # } %>% 
+      dplyr::select(-c(matches('SC._vs_Lab'))) %>%
+      arrange(across(-one_of("gene_id")))%>%
+      column_to_rownames('gene_id') })
+
+top_strn_hms <- list(msc_g_noLE_ref_ts_sce_ub_de[1:8], 
+     hmap_gn_sVl_tbls, 
+     pts_sst[1:8], 
+     rep(list(sVs_order), 8),
+     rep(list(strain_dset_lvls_don_col), 8),
+     msc_g_noLE_v3_combi_afm_seu_sst[1:8],
+     rep('strain_dset', 8),
+     c(0.02,0.1, 0.02,0.1, 0.02,0.1, 0.02,0.1),
+     c(T,T, T,T, T,T, T,T), 
+     c(rep(10, 8)),
+     c(rep(17, 8)),
+     c(rep(15, 8)),
+     c(rep(14, 8)),
+     c(rep(17, 8)),
+     c(rep(16.5, 8))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 25,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            strn2dsample = 'Lab',
+                            lgsize = ..12,
+                            lblsize = ..13,
+                            csize = ..14,
+                            botom_pad = ..15)}
+    , 'e')
+  )
+top_strn_hms
+
+                            # split_col = 'Condition',  )
+```
+
+```{r, fig.height= 5, fig.width=7.3}
+## MAST Pvalue thresholds all field versus lab pval < 10e-10 and each strain versus field pval<0.05 
+# mast_tde_corr_tbls_fVl_fg <-list(mast_tde_corr_tbls[6:10], mast_tde_corr_tbls[1:5]) %>% pmap(~left_join(..1 %>% filter(p_val_adj < 0.05), ..2 %>% filter(p_val_adj < 0.05) %>% dplyr::select(gene_id, pw_comparison, avg_log2FC, p_val_adj), by = 'gene_id') %>% pivot_longer(cols = c('pw_comparison.x', 'pw_comparison.y'), names_to = 'pw_class', values_to = 'pw_comparison' ) %>% distinct())
+
+
+hmap_gn_sVl_pp_lfc1.5 <- list(mast_tde_corr_tbls[9:28], 
+                     c(rep(list(lfstrains_comps), 20)),
+                     c(rep('^[7|N|S].*_vs_[7|N|S]*', 20)))%>%
+  pmap(possibly(~{
+    strn_comps_gns_anno_2_plt(#pval = 1e-10, 
+                              pval = 1e-10,
+                              wstat= 10,
+                              stg_pw_gns = ..1,
+                              avglfc_top = 1.1,
+                              avglfc_botom = -1.1,
+                              comp_lvls=..2,
+                              sig_strns_annotn_2_keep = ..3,
+                              strns_annotn_2_omit = 'SC._vs_[L|N|7].*|.*4_A.*')
+    
+  }
+  , 'e')
+  )
+
+top_strn_hms <- list(msc_g_noLE_ref_ts_sce_ub_de[9:28], 
+     hmap_gn_sVl_pp_lfc1.5, 
+     pts_sst[9:28], 
+     rep(list(sVs_order), 20),
+     rep(list(strain_dset_lvls_don_col), 20),
+     msc_g_noLE_v3_combi_afm_seu_sst[9:28],
+     rep('lf_strain', 20),
+     c(0.02,0.1,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02, rep(0.02, 8)),
+     c(T,T,T,T,T,T,T,T,T,T,T,T, rep(T, 8)), 
+     c(10,10,14,8.2,10,14,8.2,10,10,14,8.2,10, rep(10, 8)),
+     c(rep(17, 20)),
+     c(rep(15, 20)),
+     c(rep(14, 20)),
+     c(rep(17, 20)),
+     c(rep(18, 20))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 25,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            strn2dsample = 'Lab',
+                            lgsize = ..12,
+                            lblsize = ..13,
+                            csize = ..14,
+                            botom_pad = ..15,
+                            strain2omit_top_bar = rep(c("NF54_A", "SC6"), 20))}
+    , 'e')
+  )
+top_strn_hms
+
+                            # split_col = 'Condition',  )
+```
+
+Top 10 DE genes
+```{r, fig.height= 5, fig.width=7.3}
+## Plot significant genes waldstat>10 and MAST P <0.05 that are top 10 based on absolute log fold change of pairwise DE comparisons for the powered analysis
+hmap_gn_sVl_pp_top10 <- list(mast_tde_corr_tbls[25:28], 
+                     c(rep(list(lfstrains_comps), 4)),
+                     c(rep('^[7|N|S].*_vs_[7|N|S]*', 4)))%>%
+  pmap(possibly(~{
+    strn_comps_gns_anno_2_plt(#pval = 1e-10, 
+                              pval = 0.05,
+                              wstat= 10,
+                              topgn = 10,
+                              stg_pw_gns = ..1,
+                              comp_lvls=..2,
+                              sig_strns_annotn_2_keep = ..3,
+                              strns_annotn_2_omit = 'SC._vs_[L|N|7].*|.*4_A.*')
+    
+  }
+  , 'e')
+  )
+
+top10_strn_hms <- list(msc_g_noLE_ref_ts_sce_ub_de[25:28], 
+     hmap_gn_sVl_pp_top10, 
+     pts_sst[25:28], 
+     rep(list(sVs_order), 4),
+     rep(list(strain_dset_lvls_don_col), 4),
+     msc_g_noLE_v3_combi_afm_seu_sst[25:28],
+     rep('lf_strain', 4),
+     rep(0.02, 4),
+     rep(T, 4), 
+     rep(11, 4),
+     c(rep(14, 4)),
+     c(rep(15, 4)),
+     c(rep(14, 4)),
+     c(rep(16, 4)),
+     c(rep(19, 4))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 25,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            strn2dsample = 'Lab',
+                            lgsize = ..12,
+                            lblsize = ..13,
+                            csize = ..14,
+                            botom_pad = ..15,
+                            strain2omit_top_bar = rep(c("NF54_A", "SC6"), 4))}
+    , 'e')
+  )
+top10_strn_hms
+
+                            # split_col = 'Condition',  )
+```
+
+
+Top 10 DE genes with lab
+```{r, fig.height= 5, fig.width=7.3}
+## Plot significant genes waldstat>10 and MAST P <0.05 that are top 10 based on absolute log fold change of pairwise DE comparisons for the powered analysis
+hmap_gn_sVl_pp_top10_inc_lab <- list(mast_tde_corr_tbls[9:16], 
+                     c(rep(list(lfstrains_comps), 8)),
+                     c(rep('^[7|N|S].*_vs_[7|N|S]*', 8)))%>%
+  pmap(possibly(~{
+    strn_comps_gns_anno_2_plt(#pval = 1e-10, 
+                              pval = 0.05,
+                              wstat= 10,
+                              topgn = 1500, ## works unpredictably as some of the groups are removed after passing the ranking based on avgLogFC
+                              stg_pw_gns = ..1,
+                              comp_lvls=..2,
+                              sig_strns_annotn_2_keep = ..3,
+                              strns_annotn_2_omit = 'SC._vs_[L|N|7].*|.*4_A.*')
+    
+  }
+  , 'e')
+  )
+
+top10_strn_hms_inc_lab <- list(msc_g_noLE_ref_ts_sce_ub_de[9:16], 
+     hmap_gn_sVl_pp_top10_inc_lab, 
+     pts_sst[9:16], 
+     rep(list(sVs_order), 8),
+     rep(list(strain_dset_lvls_don_col), 8),
+     msc_g_noLE_v3_combi_afm_seu_sst[9:16],
+     rep('lf_strain', 8),
+     rep(0.02, 8),
+     rep(T, 8), 
+     rep(11, 8),
+     c(rep(14, 8)),
+     c(rep(15, 8)),
+     c(rep(14, 8)),
+     c(rep(16, 8)),
+     c(rep(19, 8))) %>%
+  pmap(possibly(
+    ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+                            gns_tbl=..2,
+                            cap_no = 25,
+                            split_col = 'Condition',
+                            ptime = ..3,
+                            strn_row_anno_order = ..4,
+                            col_map = ..5,
+                            strn_conds = 'Condition',
+                            pt_labl = 'Pseudotime',
+                            hmap_mode='seurat',
+                            seu_dset = ..6,
+                            seu_comps = ..7,
+                            chunk_size = ..8,
+                            rnames = ..9,
+                            rsize = ..10,
+                            anno_fsize = ..11,
+                            strn2dsample = 'Lab',
+                            lgsize = ..12,
+                            lblsize = ..13,
+                            csize = ..14,
+                            botom_pad = ..15,
+                            strain2omit_top_bar = rep(c("NF54_A"), 4))}
+    , 'e')
+  )
+top10_strn_hms_inc_lab
+
+                            # split_col = 'Condition',  )
+```
+
+Top MAST genes table (avglfc_top >1.5 and avglfc_top <-1.5) - includes Field vs lab aggregate - FIELD VS LAB JUST ADDED FOR genes that pass cut off for STRAIN VS STRAIN COMPARISON to see how they compare to lab. 
+Field VS lab comparison is all combined field cells versus the lab done statistically- Need to check on this clearly
+```{r}
+## MAST Pvalue thresholds all field versus lab pval < 10e-10 and each strain versus field pval<0.05 
+# mast_tde_corr_tbls_fVl_fg <-list(mast_tde_corr_tbls[6:10], mast_tde_corr_tbls[1:5]) %>% pmap(~left_join(..1 %>% filter(p_val_adj < 0.05), ..2 %>% filter(p_val_adj < 0.05) %>% dplyr::select(gene_id, pw_comparison, avg_log2FC, p_val_adj), by = 'gene_id') %>% pivot_longer(cols = c('pw_comparison.x', 'pw_comparison.y'), names_to = 'pw_class', values_to = 'pw_comparison' ) %>% distinct())
+# 
+# mast_tde_corr_tbls_fVl_fg <- list(mast_tde_corr_tbls[9:16], mast_tde_corr_tbls[1:8]) %>% 
+#   pmap(~left_join(..1%>% filter(p_val_adj < 0.05), 
+#                   ..2 %>% filter(p_val_adj < 0.05) %>% dplyr::select(gene_id, pw_comparison, avg_log2FC,waldStat, p_val_adj),  
+#                   by = 'gene_id', 
+#                   suffix = c('_fVSlab', '_sVSs'))%>% 
+#          pivot_longer(.,cols = starts_with(c('pw_comparison', 'waldStat','p_val_adj', 'avg_log2FC')), names_pattern = "(.*).(.VS.*$)", names_to = c( ".value", "f_strains_v_lab")) 
+#   )
+# 
+# hmap_gn_sVl_tbls <- list(mast_tde_corr_tbls_fVl_fg) %>%
+#   pmap(~{
+#     ..1 %>%
+#       filter(p_val_adj < 1e-10 &  (avg_log2FC > 1.5 | avg_log2FC < -1.5 ) & waldStat > 10) %>% 
+#       mutate(dir = case_when(avg_log2FC > 1.5 ~ 'Upregulated', 
+#                              avg_log2FC < -1.5 ~ 'Downregulated')) %>%
+#       mutate(across(dir, ~factor(., levels=c('Upregulated', 'Downregulated')))) %>%
+#       dplyr::select(pw_comparison, gene_id, dir) %>% 
+#       filter(!str_detect(pw_comparison, 'SC._vs_Lab')) %>% 
+#       mutate(across(pw_comparison, ~droplevels(factor(., levels = c(strns_lab_comps, 'Field_vs_Lab'))))) %>%
+#       distinct() %>%
+#       arrange(pw_comparison, dir) %>%
+#       filter(!is.na(pw_comparison)) %>%
+#       pivot_wider(names_from = 'pw_comparison', values_from = 'dir') %>%
+#       filter(if_any(matches('SC._vs_SC.'), ~!is.na(.))) %>%
+#       # {
+#       #     if(T %in% (str_detect(names(.),'SC._vs_Lab'))) 
+#       #         mutate(.,FieldvsLab_c = case_when(
+#       #             if_any(contains('Lab'), ~ . == 'Downregulated') & if_any(contains('Lab'), ~ . == 'Upregulated') ~ 'both',
+#       #             if_any(contains('Lab'), ~ . == 'Downregulated') ~ 'Downregulated',
+#       #             if_any(contains('Lab'), ~ . == 'Upregulated') ~ 'Upregulated')) 
+#       #     else 
+#       #         .
+#       # } %>% 
+#       dplyr::select(-c(matches('SC._vs_Lab'))) %>%
+#       arrange(across(-one_of("gene_id")))%>%
+#       column_to_rownames('gene_id') })
+# 
+# top_strn_hms <- list(msc_g_noLE_ref_ts_sce_ub_de[9:16], 
+#      hmap_gn_sVl_tbls, 
+#      pts_sst[1:8], 
+#      rep(list(sVs_order), 8),
+#      rep(list(strain_dset_lvls_don_col), 8),
+#      msc_g_noLE_v3_combi_afm_seu_sst[1:8],
+#      rep('strain_dset', 8),
+#      c(0.02,0.1,0.02,0.02,0.02,0.02,0.02,0.02),
+#      c(T,T,T,T,T,T,T,T), 
+#      c(10,10,14,8.2,10,14,8.2,10),
+#      c(rep(17, 8)),
+#      c(rep(15, 8)),
+#      c(rep(14, 8)),
+#      c(rep(17, 8)),
+#      c(rep(16.5, 8))) %>%
+#   pmap(possibly(
+#     ~{hmap_pw_strns_lab_tde(ts_dset= ..1,
+#                             gns_tbl=..2,
+#                             cap_no = 25,
+#                             split_col = 'Condition',
+#                             ptime = ..3,
+#                             strn_row_anno_order = ..4,
+#                             col_map = ..5,
+#                             strn_conds = 'Condition',
+#                             pt_labl = 'Pseudotime',
+#                             hmap_mode='seurat',
+#                             seu_dset = ..6,
+#                             seu_comps = ..7,
+#                             chunk_size = ..8,
+#                             rnames = ..9,
+#                             rsize = ..10,
+#                             anno_fsize = ..11,
+#                             strn2dsample = 'Lab',
+#                             lgsize = ..12,
+#                             lblsize = ..13,
+#                             csize = ..14,
+#                             botom_pad = ..15)}
+#     , 'e')
+#   )
+# top_strn_hms
+
+                            # split_col = 'Condition',  )
+```
+
+
+```{r}
+##Check overlap between field DE genes across donors to see which genes are likely to always be DE between strains in a donor - competition genes
+sig_fde <- mast_tde_corr_tbls[str_detect(names(mast_tde_corr_tbls), "StrainsDE_MSC[0-9]*_f_don$")] %>% map(~.x %>% filter(( p_val_adj < 0.05 & waldStat > 10)) %>% distinct(gene_id, .keep_all = T) %>% left_join(., Pf3D7_genes_plasmoDB, by = "gene_id")) 
+
+sig_mde <- mast_tde_corr_tbls[str_detect(names(mast_tde_corr_tbls), "StrainsDE_MSC[0-9]*_m_don$")] %>% map(~.x %>% filter((p_val_adj < 0.05 & waldStat > 10)) %>% distinct(gene_id, .keep_all = T) %>% left_join(., Pf3D7_genes_plasmoDB, by = "gene_id")) 
+
+names(sig_fde) <- str_remove(names(sig_fde), "lf_StrainsDE_")
+names(sig_mde) <- str_remove(names(sig_mde), "lf_StrainsDE_")
+
+sig_mde[[3]]
+```
+
+
+```{r}
+## Overlap between significant DE genes between samples - venn
+## female
+ggvenn(map(sig_fde, ~.x$gene_id))
+
+## male
+ggvenn(map(sig_mde, ~.x$gene_id))
+```
+
+
+```{r}
+##Check overlap between field DE genes across donors to see which genes are likely to always be DE between strains in a donor - competition genes
+sig_fde_wk <- mast_tde_corr_tbls[str_detect(names(mast_tde_corr_tbls), "StrainsDE_MSC[1|3|13]*_f_don$")] %>% map(~.x %>% filter(( p_val_adj < 0.05 & waldStat > 10)) %>% distinct(gene_id, .keep_all = T) %>% left_join(., Pf3D7_genes_plasmoDB, by = "gene_id")) 
+
+sig_mde_wk <- mast_tde_corr_tbls[c("lf_StrainsDE_MSC1_m_don", "lf_StrainsDE_MSC13_m_don", "lf_StrainsDE_MSC14_m_don")] %>% map(~.x %>% filter((p_val_adj < 0.05 & waldStat > 10)) %>% distinct(gene_id, .keep_all = T) %>% left_join(., Pf3D7_genes_plasmoDB, by = "gene_id")) 
+
+names(sig_fde_wk) <- str_remove_all(names(sig_fde_wk), "lf_StrainsDE_|_f_don")
+names(sig_mde_wk) <- str_remove_all(names(sig_mde_wk), "lf_StrainsDE_|_m_don")
+
+sig_mde_wk[[2]]
+```
+
+
+```{r}
+## Overlap between significant DE genes between samples - venn
+## female
+fde_wk_ven <- ggvenn(map(sig_fde_wk, ~.x$gene_id),
+       show_percentage = F,
+         text_size = 6,
+         set_name_size = 6,
+  ) + coord_fixed(ratio = 2/4)+
+    theme(#aspect.ratio = 3/4,
+    # plot.background = element_rect(fill = "yellow"),
+    plot.margin = margin(0,0,0,0))+
+      scale_y_continuous(limits = c(-2, 2))
+
+## male
+mde_wk_ven <-ggvenn(map(sig_mde_wk, ~.x$gene_id),
+       show_percentage = F,
+         text_size = 6,
+         set_name_size = 6,
+  ) + coord_fixed(ratio = 2/4)+
+    theme(#aspect.ratio = 3/4,
+    # plot.background = element_rect(fill = "yellow"),
+    plot.margin = margin(0,0,0,0))+
+      scale_y_continuous(limits = c(-2, 2))
+
+fde_wk_ven
+mde_wk_ven
+```
+
+```{r}
+## Overlap between significant DE genes between samples - list
+## female
+# Create a list of all the combinations
+# a <- map(sig_fde, ~.x$Gene)
+a <- map(sig_fde_wk, ~.x$Gene)
+combs <- 
+  unlist(lapply(1:length(a), 
+                function(j) combn(a, j, simplify = FALSE)),
+         recursive = FALSE)
+names(combs) <- sapply(combs, function(i) paste0(names(i), collapse = ""))
+
+
+overlaps <- map(combs, ~(Reduce(base::intersect,.x)))
+overlaps_nonempty <- overlaps[unlist(map(overlaps, ~length(.x) > 0))]
+overlaps_nonempty[str_detect(names(overlaps_nonempty), ".*_.*_")]
+
+```
+
+
+```{r}
+## Overlap between significant DE genes between samples - list
+## male
+# Create a list of all the combinations
+# a <- map(sig_fde, ~.x$Gene)
+a <- map(sig_mde_wk, ~.x$Gene)
+combs <- 
+  unlist(lapply(1:length(a), 
+                function(j) combn(a, j, simplify = FALSE)),
+         recursive = FALSE)
+names(combs) <- sapply(combs, function(i) paste0(names(i), collapse = ""))
+
+
+overlaps <- map(combs, ~(Reduce(base::intersect,.x)))
+overlaps_nonempty <- overlaps[unlist(map(overlaps, ~length(.x) > 0))]
+overlaps_nonempty[str_detect(names(overlaps_nonempty), ".*_.*_")]
+
+```
+
+```{r}
+##Check overlap between field DE genes across donors to see which genes are likely to always be DE between strains in a donor - competition genes
+lab_de <- mast_tde_corr_tbls[c("lf_StrainsDE_M_NF54_7G8_f", "lf_StrainsDE_M_NF54_7G8_m")] %>% map(., ~.x %>% filter(p_val_adj < 0.05 & waldStat > 10) %>% distinct(gene_id, .keep_all = T)  %>% left_join(., Pf3D7_genes_plasmoDB, by = "gene_id"))
+
+fld_de <- mast_tde_corr_tbls[c("lf_StrainsDE_MSC14_f_don3", "lf_StrainsDE_MSC3_m_don")] %>% map(., ~.x %>% filter((p_val_adj < 0.05 & waldStat > 10)) %>% distinct(gene_id, .keep_all = T)  %>% left_join(., Pf3D7_genes_plasmoDB, by = "gene_id"))
+
+
+names(lab_de) <- str_remove(names(lab_de), "lf_StrainsDE_")
+names(fld_de) <- str_remove(names(fld_de), "lf_StrainsDE_")
+
+fld_de[[2]]
+```
+
+```{r}
+## Overlap between significant DE genes between samples - venn
+## female
+fld_lab_de <- map2(fld_de, lab_de, ~{
+  ggvenn(list("Donor strains" = .x$gene_id, 
+         "NF54 vs 7G8" = .y$gene_id),
+          fill_color = c("#54d1ef", "#92b938"),
+         show_percentage = T,
+         text_size = 5,
+         set_name_size = 5,
+  ) + coord_fixed(ratio = 2/4)+
+    theme(#aspect.ratio = 3/4,
+    # plot.background = element_rect(fill = "yellow"),
+    plot.margin = margin(0,0,0,0))+
+      scale_y_continuous(limits = c(-1, 2))
+})
+
+
+fld_lab_de
+```
+
+```{r}
+top_sig_gns_plts <- stg_strn_mast_gns_smooth_plts(gn_xprsn_tbls = c( gn_tble_gg_smoother), 
+                                                  gns_strn = map(strns_ub_pairwise_mkrs_pt_ml_sst, 
+                                                                 . %>%
+                                                                   filter(p_val_adj < 10e-20 & (avg_log2FC > 1 | avg_log2FC < -1))  %>% 
+                                                                   arrange(p_val_adj) %>%
+                                                                   dplyr::select(gene_id, pw_comparison)), 
+                                                  stage_nms = names(strns_ub_pairwise_mkrs_pt_ml_sst), 
+                                                  comp_g = 'pw_comparison',
+                                                  ptimes = pts_sst,
+                                                  top_gns = 10)
+
+stg_strn_mast_gns_smooth_plts_saver(plts_cnm =  'top_sig_gns_plts', plt_lst = top_sig_gns_plts)
+
+```
+
+Save top significant pairwise strain DE genes by MAST adjusted p value (<10e-20)
+```{r, fig.width=16, fig.height=8}
+                                   
+p2 =EnhancedVolcano(strns_ub_pairwise_mkrs_pt_ml_sst[[15]] %>% filter(pw_comparison == 'SC2_vs_SC7'),
+                    lab = left_join(strns_ub_pairwise_mkrs_pt_ml_sst[[15]], Pf3D7_genes_plasmoDB, by = 'gene_id')%>% filter(pw_comparison == 'SC2_vs_SC7') %>% pull(Gene),
+                    x = 'avg_log2FC',
+                    y = 'p_val_adj',
+                    hline = c(10e-10),
+                    pCutoff = 0.05,
+                    FCcutoff = 1,
+                    pointSize = 3.0,
+                    labSize = 4.0,
+                    title = '',
+                    subtitle = "",
+                    titleLabSize = 0,
+                    subtitleLabSize = 0,
+                    legendLabels =c(expression(Log[2] ~ FC), "p-value"))
+
+p3 =EnhancedVolcano(strns_ub_pairwise_mkrs_pt_ml_sst[[15]] %>% filter(pw_comparison == 'SC5_vs_SC7'),
+                    lab = left_join(strns_ub_pairwise_mkrs_pt_ml_sst[[15]], Pf3D7_genes_plasmoDB, by = 'gene_id')%>% filter(pw_comparison == 'SC5_vs_SC7') %>% pull(Gene),
+                    x = 'avg_log2FC',
+                    y = 'p_val_adj',
+                    hline = c(10e-10),
+                    pCutoff = 0.05,
+                    FCcutoff = 1,
+                    pointSize = 3.0,
+                    labSize = 4.0,
+                    title = '',
+                    subtitle = "",
+                    titleLabSize = 0,
+                    subtitleLabSize = 0,
+                    legendLabels =c(expression(Log[2] ~ FC), "p-value"))
+
+plot_grid(p2,p3, ncol = 3  )
+
+```
+
+
+Strains pairwise DE overlap genes
+venn diagram overlap in genes upregulated in first strain versus the second
+```{r, fig.width= 8, fig.height=3}
+
+# strns_comps =  c('SC2_vs_SC5', 'SC2_vs_SC7', 'SC5_vs_SC7')
+list(strns_ub_pairwise_mkrs_pt_ml_sst[11:14]) %>%
+  pmap(., ~{
+    mast_de_tbl = ..1
+    map(strns_comps, ~ mast_de_tbl %>% 
+          filter(p_val_adj < 0.05  & pw_comparison== .x & avg_log2FC > 0.2) %>% 
+          pull(gene_id)) %>% 
+      set_names(.,strns_comps) %>% 
+      ggvenn(., fill_color =c("#0073C2FF", "#EFC000FF", "#868686FF", "#866686FF"), stroke_size = 0.5, set_name_size = 4 )
+  }
+  ) 
+
+```
+
+overlap in genes upregulated in second strain versus the first
+
+```{r, fig.width= 8, fig.height=3}
+
+list(mast_tde_corr_tbls[11], names(mast_tde_corr_tbls[11])) %>%
+  pmap(., ~{
+    mast_de_tbl = ..1
+    plt<-map(strns_comps, ~ mast_de_tbl %>% 
+               filter(p_val_adj < 0.05  & waldStat>10  & pw_comparison== .x ) %>% 
+               pull(gene_id)) %>% 
+      set_names(.,strns_comps %>% str_replace(., '_vs_', ' vs ')) %>% 
+      ggvenn()+ 
+      # scale_fill_discrete(name = "Condition", values = c("#0073C2FF", "#EFC000FF", "#868686FF"))+
+      scale_x_continuous(expand = expansion(mult = .15,add = .15))+ 
+      scale_y_continuous(expand = expansion(mult = .15,add = .15))#+ 
+    # guides(fill = guide_legend(title = "Title")) +
+    # theme(legend.position = "bottom")
+    
+    print(plt)
+    # export::graph2ppt(plt,file= paste0('/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/plots/mali2021_all/strain_de/venns/', ..2))
+  }
+  ) 
+```
+
+
+UpSet plot
+```{r, fig.width= 15, fig.height=4.8}
+# list(mast_tde_corr_tbls[6:10]) %>%
+upst_strn_de_plts <- list(mast_tde_corr_tbls[c(9:10,12,14:16,27)], c(0,3,2,3,3,2,3), c(50,50,8,50,50,8,50)) %>%
+  pmap(., ~{
+    ..1 %>% filter(p_val_adj < 0.05 & waldStat>10) %>% 
+      pivot_wider(id_cols = 'gene_id', names_from = pw_comparison, values_from = p_val_adj) %>% 
+      # dplyr::select(matches('^[SC|7|N].*')) %>% 
+      dplyr::select(-c(matches('SC._vs_[L|N|7].*'),matches('^.*_vs_NF54_A'), gene_id))%>% 
+      dplyr::filter(if_any(everything(), ~!is.na(.))) %>% 
+      mutate(across(everything(), ~ifelse(is.na(.), F, T))) %>% 
+      ComplexUpset::upset(., colnames(.), 
+                          height_ratio=1.1, 
+                          width_ratio=0.3, 
+                          # min_size=..2, ## !!NOTE activate for female (LE) which has very many comparisons with intersection size 1
+                          n_intersections =..3,
+                          set_sizes=FALSE,
+                          # set_sizes=(
+                          #   upset_set_size()+
+                          #     theme(axis.text.x=element_text(size = 18, angle=90),
+                          #           axis.title.x=element_text(size = 20))
+                          # ),
+                          base_annotations=list(
+                            'Intersection size'=intersection_size(
+                              text=list(
+                                # vjust=0.5,
+                                # hjust=0.5,
+                                # angle=90,
+                                size = 5.2#,
+                                # fontface = 'bold'
+                                # text_colors=c(on_background='black', on_bar='black')
+                              ) 
+                            ) + 
+                              labs(y= 'DE genes\nintersection')+
+                              scale_y_continuous(expand = expansion(mult = c(0, 0)))),
+                          matrix=(
+                            intersection_matrix()), 
+                          name= 'Pairwise \nstrain comparison',
+                          themes=upset_modify_themes(
+                            list(
+                              'intersections_matrix'=theme(axis.text.y=element_text(size=18),
+                                                           axis.title.x=element_text(size=18, face = 'bold')),
+                              #'overall_sizes'=theme(axis.text.x=element_text(size=20)),
+                              'Intersection size' = theme(axis.text.y=element_text(size=18), 
+                                                          axis.title.y=element_text(size=18, face = 'bold'))
+                                                          #axis.title.y=element_text(size=18, face = 'bold'))
+                            )
+                          )
+      ) 
+  })
+
+upst_strn_de_plts
+```
+
+
+
+```{r}
+##Check overlap between msc14 female and msc3 male DE strain DE genes - venn diagram
+f_de_gns <- mast_tde_corr_tbls[["lf_StrainsDE_MSC14_f_don3"]] %>% filter(p_val_adj < 0.05 & waldStat>10) %>% mutate(across(pw_comparison, ~droplevels(factor(.,  levels = strns_lab_comps)))) 
+f_de_gns <- split(f_de_gns, f = f_de_gns$pw_comparison) %>% map(~.x %>% pull(gene_id))
+comp_nms <- names(f_de_gns)
+
+m_de_gns <- mast_tde_corr_tbls[["lf_StrainsDE_MSC3_m_don2"]] %>% filter(p_val_adj < 0.05 & waldStat>10) %>% mutate(across(pw_comparison, ~droplevels(factor(.,  levels = strns_lab_comps)))) 
+m_de_gns <- split(m_de_gns, f = m_de_gns$pw_comparison) %>% map(~.x %>% pull(gene_id))
+      
+```
+
+
+```{r}
+## Overlap between significant DE genes between samples - venn
+## female
+names(f_de_gns) <- str_replace(names(f_de_gns), "_vs_", ".")
+fde_ven <- ggvenn(f_de_gns,
+       show_percentage = F,
+         text_size = 6,
+         set_name_size = 6,
+       fill_color = as.character(fld_strns_nf54_7g8_comps_col[comp_nms]),
+  ) + 
+  # coord_fixed(ratio = 2/4)+
+    theme(aspect.ratio = 3.6/4,
+    # plot.background = element_rect(fill = "yellow"),
+    plot.margin = margin(0,0,0,0))+
+      scale_y_continuous(limits = c(-1.95, 1.95))
+
+## male
+mde_ven <- ggplot()+
+geom_circle(aes(x0 = 10, y0 = 10, r = 6, fill = fld_strns_nf54_7g8_comps_col[names(m_de_gns)], alpha = 0.5), inherit.aes = FALSE)+
+geom_text(aes(x = 10, y = 10, label = length(m_de_gns[[1]])), size = 6, face ="plain") +
+  labs(title = str_replace(names(m_de_gns), "_vs_", "."))+
+  theme_void()+
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5, face = "plain", size = 16),
+        plot.margin = margin(t = 1.2, r = 2, b = 2, l = 2, "cm"))+
+  coord_fixed()
+
+fde_ven
+mde_ven
+```
+
+
+Put together the plots for the DE analysis
+```{r}
+svs_denst_lfs_plts <- readRDS("plots/mali2021/svs_denst_lfs_plts.RDS")
+```      
+                   
+```{r, fig.width= 8.5, fig.height=10}
+plts <- pmap(list(all_strn_fld_hms[c(1:2,4)], svs_denst_lfs_plts[c(1:2,4)], upst_strn_de_plts[c(1:3)]), ~{
+  HM_gb = grid.grabExpr(draw(..1))
+  
+  cowplot::plot_grid( HM_gb,
+                      plot_grid(..2+
+                                  theme(axis.text=element_text(size=14),
+                                        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+                                        axis.title=element_text(size=16,face="bold"), 
+                                        legend.text = element_text(size = 16) ,
+                                        legend.title = element_text(size = 17, face = "bold"),
+                                        legend.position="bottom",
+                                        plot.background = element_rect(color = "lightgrey"),
+                                        plot.margin=margin(t=0.6,r=0.2,b=0.6,l=0.2,unit="cm")
+                                  )+ 
+                      guides(color = guide_legend(override.aes = list(size = 4), ncol = 2, title.position = "top")), 
+                                ..3, 
+                                ncol=2, 
+                                rel_widths = c(.35,.65)
+                      ) +
+                        theme(plot.margin=margin(b=0.8,unit="cm")) + panel_border(),
+                      ncol=1, 
+                      rel_heights = c(5.6,4.4)
+  )
+}
+
+)
+# theme(plot.background = element_rect(color = "black")
+```
+
+```{r, fig.width= 14, fig.height=18}
+plot_grid(plotlist = plts, nrow = 2, ncol = 2, labels = c('A','B','C','D'), label_size = 24, vjust = 1.1)
+```                      
+
+```{r, fig.width= 12, fig.height=6}
+##Put together the plots for main fig 4 on female HE DE distribution along pseudotime and DE
+
+##modify patchwork upset plot appropriately
+upst_strn_de_plts[[7]][[1]] <- upst_strn_de_plts[[7]][[1]] + theme(axis.title.y = element_text(size = 15,face="plain"))
+upst_strn_de_plts[[7]][[1]] <- upst_strn_de_plts[[7]][[1]] + theme(axis.text.y = element_text(size = 14))
+# upst_strn_de_plts[[7]][[2]] <- upst_strn_de_plts[[7]][[2]]+ theme(text = element_text(size = 8))
+upst_strn_de_plts[[7]][[2]] <- upst_strn_de_plts[[7]][[2]]+ theme(axis.text.y = element_text(size = 15))
+upst_strn_de_plts[[7]][[2]] <- upst_strn_de_plts[[7]][[2]]+ theme(axis.title.x = element_text(size = 15,face="plain"))
+
+strain_fhDE <- plot_grid(
+  plot_grid(svs_denst_lfs_plts[[19]]+
+              theme(axis.text=element_text(size=14),
+                    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+                    axis.title=element_text(size=15,face="plain"), 
+                    legend.text = element_text(size = 14) ,
+                    legend.title = element_text(size = 15, face = "plain"),
+                    # legend.position="bottom",
+                    # plot.background = element_rect(color = "lightgrey"),
+                    plot.margin=margin(t=0.6,r=0.6,b=0.2,l=0.6,unit="cm")
+              )+ 
+              guides(color = guide_legend(override.aes = list(size = 4), ncol = 1, title.position = "top")), 
+            ggdraw(upst_strn_de_plts[[7]])+
+              theme(plot.margin = margin(t=0.6, b=0.1, unit = "cm")), 
+            nrow=2, 
+            rel_heights = c(.38,.62),
+            labels = c('C', 'D'),
+            label_size = 24,
+            vjust= 1
+  ),
+  
+  
+  plot_grid(NULL, 
+            grid.grabExpr(draw(top10_strn_hms[['lf_StrainsDE_MSC14_f_don3']])),
+            NULL,
+            nrow=3, 
+            rel_heights = c(.05,.9,.05),
+            labels = c('E','', ''),
+            label_size = 24,
+            vjust= 1 ),
+  ncol=2,
+  rel_widths = c(.4,.6)
+)
+strain_fhDE
+
+# theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm"))
+```
+
+
+```{r, fig.width= 6, fig.height=8}
+##Put together the plots for main fig 4 on female HE DE distribution along pseudotime and DE
+
+strain_fhDE <- list(svs_denst_lfs_plts[19:20], list(fde_ven, mde_ven), top10_strn_hms[c('lf_StrainsDE_MSC14_f_don3', 'lf_StrainsDE_MSC3_m_don2')], list(c("E", "F", "G"), c("H", "I", "J"))) %>%
+  pmap(., ~{
+  plot_grid(
+  plot_grid(..1+
+              theme(axis.text=element_text(size=14),
+                    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+                    axis.title=element_text(size=15,face="plain"), 
+                    legend.text = element_text(size = 14) ,
+                    legend.title = element_text(size = 15, face = "plain"),
+                    legend.position="bottom",
+                    # plot.background = element_rect(color = "lightgrey"),
+                    plot.margin=margin(t=0.6,r=0.6,b=0.2,l=0.6,unit="cm")
+              )+ 
+              guides(color = guide_legend(override.aes = list(size = 4), nrow = 1, title.position = "top")), 
+            ggdraw(..2)+
+              theme(plot.margin = margin(t=0.6, b=0.1, unit = "cm")), 
+            ncol=2, 
+            rel_widths = c(.45,.55),
+            labels = c(..4[1], ..4[2]),
+            label_size = 24,
+            vjust= 1
+  ),
+  
+  
+  plot_grid(NULL, 
+            grid.grabExpr(draw(..3)),
+            NULL,
+            nrow=3, 
+            rel_heights = c(.05,.9,.05),
+            labels = c(..4[3],'', ''),
+            label_size = 24,
+            vjust= 0.8 ),
+  nrow=2,
+  rel_heights = c(.4,.6)
+)
+  })
+strain_fhDE
+
+# theme(plot.margin = margin(t=0.7, b=0.3, unit = "cm"))
+```
+
+```{r, fig.width= 12, fig.height=7}
+##Put together the plots for main fig 4 
+main_de_plt <- plot_grid(plotlist = strain_fhDE, ncol = 2)
+main_de_plt
+```
+
+
+```{r, fig.width= 12, fig.height=7}
+##save svg for sk21
+save_plot('plots/mali2021_all/fig4/main_de_plt.svg',main_de_plt, base_width = 12, base_height = 7)
+```
+
+```{r} 
+##read plot grid for the scmap, strain pca and strain distribution generated in a different notebook
+# stg_strn_scmap_pca_tbl_fig4_grid <- readRDS('plots/mali2021_all/fig4/stg_strn_scmap_pca_tbl_fig4_grid.RDS')
+# 
+# ## umap with baby
+# all_stg_umap_fldHL <- readRDS('plots/mali2021_all/fig4/all_stg_umap_fldHL.RDS')
+```
+
+
+```{r, fig.width= 12, fig.height=14, eval=F}
+##!! NB for old main fig
+##Put together the plots for main fig 4 on female HE DE distribution along pseudotime and DE
+fig_main <- plot_grid(stg_strn_scmap_pca_tbl_fig4_grid +
+            theme(plot.margin = margin(b=0.6, unit = "cm")),
+          strain_fhDE,
+          plot_grid(NULL, all_stg_umap_fldHL, nrow = 1, rel_widths = c(.5,.5)),
+nrow=3,
+rel_heights = c(.32,.40, .28)
+)
+
+fig_main
+
+save_plot('plots/mali2021_all/fig4/final_main_pt.svg',fig_main, base_width = 12, base_height = 14)
+```
+
+      
+Count genes for manuscript 
+```{r}
+##Field VS lab genes
+map(mast_tde_corr_tbls[1:8], . %>% filter(p_val_adj < 0.05 & waldStat>10) %>% pull(gene_id) %>% unique() %>% length())
+
+##strain DE genes
+map(mast_tde_corr_tbls[6:10], . %>% filter(p_val_adj < 0.05 & waldStat>10) %>% dplyr::filter(str_detect(pw_comparison, 'SC._vs_SC.')) %>% pull(gene_id) %>% unique() %>% length())
+
+##Number of DE genes in genes present in both field and lab parasites
+map(mast_tde_corr_tbls[9:28], . %>% filter(p_val_adj < 0.05 & waldStat>10)%>% dplyr::filter((str_detect(pw_comparison, 'SC._vs_SC.') | str_detect(pw_comparison, 'NF54_vs_7G8'))) %>% pull(gene_id) %>% unique() %>% length())
+
+##Number of DE genes in genes present in both field and lab parasites
+map(mast_tde_corr_tbls[9:28], . %>% filter(p_val_adj < 0.05 & waldStat>10)%>% dplyr::filter(pw_comparison == 'SC5_vs_SC7') %>% pull(gene_id) %>% unique() %>% length())
+
+map(mast_tde_corr_tbls[9:28], . %>% filter(p_val_adj < 0.05 & waldStat>10)%>% dplyr::filter(pw_comparison == 'SC2_vs_SC5') %>% pull(gene_id) %>% unique() %>% length())
+
+map(mast_tde_corr_tbls[9:28], . %>% filter(p_val_adj < 0.05 & waldStat>10)%>% dplyr::filter(pw_comparison == 'SC2_vs_SC7') %>% pull(gene_id) %>% unique() %>% length())
+
+##Number of DE genes in genes present in both field and lab parasites
+map(mast_tde_corr_tbls[9:28], . %>% filter(p_val_adj < 0.05 & waldStat>10)%>% dplyr::filter(pw_comparison == 'NF54_vs_7G8') %>% pull(gene_id) %>% unique() %>% length())
+
+##Counts per strain in balanced object to compare DE in field VS DE in lab
+msc_g_noLE_v3_combi_strn_mast[[13]]@meta.data %>% dplyr::count(lf_strain)
+```
+
+```{r}
+##save as RDS object to be able to add the GO analysis in the functional_GO_n_lit_comparison.Rmd notebook
+saveRDS(all_labvfld_hms[1:8], 'plots/mali2021_all/DE_heatmaps/all_labvfld_hms_fvl.RDS')
+
+```     
+               
+Get genes that are expressed in 25% of the both field and lab parasites to get conclude on whether we seem more genes in the 7G8 vs NF54 comparison compared to the field strain comparisons 
+
+```{r}
+##Get genes expressed in atleast 25% of subset of interest in the integrated object ##WHY 69 GENES????
+
+##1. lab parasites - day10A dataset with 7g8 and nf54
+msc_g_noLE_v3_combi_strn_mast_fh_labB <- lapply(msc_g_noLE_v3_combi_strn_mast[9:16], function(x) x[,x@meta.data$lf_strain %in% c('NF54', '7G8')])
+gn_prev_fh_labB <- lapply(msc_g_noLE_v3_combi_strn_mast_fh_labB, function(x) rowSums(x@assays$RNA@counts > 0)/dim(x)[2])
+gns_fh_labB_25p <- lapply(gn_prev_fh_labB, function(x) names(x[x>=0.25] ))
+
+##1. Field parasites
+msc_g_noLE_v3_combi_strn_mast_fh_fld <- lapply(msc_g_noLE_v3_combi_strn_mast[9:16], function(x) x[,grepl('SC', x@meta.data$lf_strain)])
+gn_prev_fh_fld <- lapply(msc_g_noLE_v3_combi_strn_mast_fh_fld, function(x) rowSums(x@assays$RNA@counts > 0)/dim(x)[2])
+gn_prev_fh_fld_25p <- lapply(gn_prev_fh_fld, function(x) names(x[x>=0.25] ))
+
+##Gene genes present in atleast 25% of both lab and field parasite subsets 
+fld_labB_overlap_gns <- map2(gns_fh_labB_25p,gn_prev_fh_fld_25p, ~.x[.x %in% .y])
+
+## The 7f8 vs nf54 and pure strain comparisons for msc13_m and msc14_f do not need the identification of genes that are identified both in lab and field and therefore adding NULL to represent these in the list
+fld_labB_overlap_gns <- c(fld_labB_overlap_gns, rep(list(NULL), 12) %>% set_names(names(msc_g_noLE_v3_combi_strn_mast[17:28])))
+     
+```
+
+DE genes in fld and lab that are in both 
+UpSet plot
+
+```{r, fig.width= 15, fig.height=4.8}
+# list(mast_tde_corr_tbls[6:10]) %>%
+upst_strn_de_plts_fld_labB_gns <- list(mast_tde_corr_tbls[c(9:10,12,14:16)], fld_labB_overlap_gns[str_remove(names(mast_tde_corr_tbls[c(9:10,12,14:16)]), "lf_StrainsDE_")]) %>%
+  pmap(., ~{
+    ..1 %>% 
+      filter(gene_id %in% ..2) %>%
+      filter(p_val_adj < 0.05 & waldStat>10) %>% 
+      pivot_wider(id_cols = 'gene_id', names_from = pw_comparison, values_from = p_val_adj) %>% 
+      # dplyr::select(matches('^[SC|7|N].*')) %>% 
+      dplyr::select(-c(matches('SC._vs_[L|N|7].*'),matches('^.*_vs_NF54_A'), gene_id))%>% 
+      dplyr::filter(if_any(everything(), ~!is.na(.))) %>% 
+      mutate(across(everything(), ~ifelse(is.na(.), F, T))) %>% 
+      ComplexUpset::upset(., colnames(.), 
+                          height_ratio=1.1, 
+                          width_ratio=0.3, 
+                          set_sizes=FALSE,
+                          base_annotations=list(
+                            'Intersection size'=intersection_size(
+                              text=list(
+                                size = 5.2
+                              ) 
+                            ) + 
+                              labs(y= 'DE genes\nintersection')+
+                              scale_y_continuous(expand = expansion(mult = c(0, 0)))),
+                          matrix=(
+                            intersection_matrix()), 
+                          name= 'Pairwise \nstrain comparison',
+                          themes=upset_modify_themes(
+                            list(
+                              'intersections_matrix'=theme(axis.text.y=element_text(size=18),
+                                                           axis.title.x=element_text(size=18, face = 'bold')),
+                              'Intersection size' = theme(axis.text.y=element_text(size=18), 
+                                                          axis.title.y=element_text(size=20, face = 'bold'))
+                            )
+                          )
+      ) 
+  })
+
+upst_strn_de_plts_fld_labB_gns
+```
+
+
+```{r, fig.width= 6, fig.height=4.8}
+# list(mast_tde_corr_tbls[6:10]) %>%
+plt_nms <- names(mast_tde_corr_tbls[c(9:10,12,14:18,23:24,27)])
+upst_strn_de_plts_fld_labB_gns <- list(mast_tde_corr_tbls[plt_nms], fld_labB_overlap_gns[str_remove(plt_nms, "lf_StrainsDE_")], c('Y', 'Y', 'Y', 'Y', 'Y', 'Y', 'N', 'N', 'N', 'N', 'N')) %>%
+  pmap(., ~{
+    
+    
+    tb<- ..1 %>% filter(p_val_adj < 0.05 & waldStat>10) %>% 
+    pivot_wider(id_cols = 'gene_id', names_from = pw_comparison, values_from = p_val_adj)  %>% 
+    dplyr::select(-c(matches('SC._vs_[L|N|7].*'),matches('^.*_vs_NF54_A')))%>% 
+    dplyr::filter(if_any(contains('vs'), ~!is.na(.))) %>% 
+    mutate(across(contains('vs'), ~ifelse(is.na(.), F, T)))
+    
+    if(..3 == 'Y')
+    
+    {
+    ComplexUpset::upset(tb %>% 
+    mutate(lab_field = if_else(gene_id %in% ..2, 'Yes', 'No')), 
+                        tb %>% dplyr::select(contains('vs')) %>% colnames(), 
+                          height_ratio=1.1, 
+                          width_ratio=0.3, 
+                          set_sizes=FALSE,
+                          min_size = 0, ## !!  REMOVING COMBINATIONS WITH SIZE OF 1
+                          base_annotations=list(
+                            'Intersection size'=intersection_size(
+                              text=list(
+                                size = 4.8,
+                                vjust=0.5,
+                                hjust=-0.1,
+                                angle=90
+                              ),
+                              bar_number_threshold = 1,
+                              # counts=FALSE,
+                              mapping=aes(fill=lab_field) 
+                            ) + 
+                              labs(y= 'DE genes\nintersection')+
+                              scale_y_continuous(expand = expansion(mult = c(0, 0.35)))+
+                              scale_fill_manual(name = "Lab & Field", values = c('No' = '#d2a7d2', 'Yes'= '#40e0d0'))+
+                              theme(legend.position = 'top',
+                                    legend.margin = margin(b=-9),
+                                    legend.text = element_text(size = 13),
+                                    legend.title = element_text(size = 14))),
+                          matrix=(
+                            intersection_matrix()), 
+                          name= 'Pairwise strain comparison',
+                          themes=upset_modify_themes(
+                            list(
+                              'intersections_matrix'=theme(axis.text.y=element_text(size=14),
+                                                           axis.title.x=element_text(size=15)),
+                              'Intersection size' = theme(axis.text.y=element_text(size=14), 
+                                                          axis.title.y=element_text(size=15, face = 'plain'))
+                            )
+                          )
+      ) 
+    }
+    else
+    {
+    ComplexUpset::upset(tb, 
+                        tb %>% dplyr::select(contains('vs')) %>% colnames(), 
+                          height_ratio=1.1, 
+                          width_ratio=0.3, 
+                          set_sizes=FALSE,
+                          base_annotations=list(
+                            'Intersection size'=intersection_size(
+                              text=list(
+                                size = 4,
+                                vjust=0.5,
+                                hjust=-0.1,
+                                angle=90
+                              ),
+                              bar_number_threshold = 1,
+                              # counts=FALSE 
+                            ) + 
+                              labs(y= 'DE genes\nintersection')+
+                              scale_y_continuous(expand = expansion(mult = c(0, 0.35)))),
+                          matrix=(
+                            intersection_matrix()), 
+                          name= 'Pairwise strain comparison',
+                          themes=upset_modify_themes(
+                            list(
+                              'intersections_matrix'=theme(axis.text.y=element_text(size=14),
+                                                           axis.title.x=element_text(size=15)),
+                              'Intersection size' = theme(axis.text.y=element_text(size=14), 
+                                                          axis.title.y=element_text(size=15))
+                            )
+                          )
+      ) 
+    }
+  })
+
+upst_strn_de_plts_fld_labB_gns
+```
+
+Put together the plots for the DE analysis
+                      
+```{r, fig.width= 9, fig.height=10}
+# pt_indx <- c(9:10,12,14:18,23:24,27)
+# 
+# plts <- pmap(list(all_labvfld_hms[pt_indx], svs_denst_lfs_plts[pt_indx-8], upst_strn_de_plts), ~{
+# 
+# plts <- pmap(list(all_labvfld_hms[c(9:10,12,14:16)], svs_denst_lfs_plts[c(1:2,4,6:8)], upst_strn_de_plts), ~{
+#   HM_gb = ggdraw(grid.grabExpr(draw(..1)))
+#   plot_grid(
+#   cowplot::plot_grid( HM_gb+
+#                         theme(plot.margin=margin(b=0.2,t=0.8,unit="cm")),
+#                       ..2+
+#                                   theme(axis.text=element_text(size=14),
+#                                         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+#                                         axis.title=element_text(size=16,face="bold"), 
+#                                         legend.text = element_text(size = 16) ,
+#                                         legend.title = element_text(size = 17, face = "bold"),
+#                                         legend.position="bottom",
+#                                         plot.margin=margin(b=2.1,t=2.1,unit="cm"),
+#                                         plot.background = element_rect(color = "lightgrey")#,
+#                                         # plot.margin=margin(t=1,r=0.2,b=1,l=0.2,unit="cm")
+#                                   )+ 
+#                       guides(color = guide_legend(override.aes = list(size = 4), ncol = 2, title.position = "top")),
+#                       ncol=2, 
+#                       rel_widths = c(7.2, 2.8),
+#                       labels = c('A','B'), 
+#                       label_size = 24, 
+#                       vjust = 1.2
+#                       ) + 
+#                         panel_border(),
+#                                 ggdraw(..3) +
+#                         theme(plot.margin=margin(b=0.2,t=0.8,unit="cm")), 
+#                                 ncol=1,
+#                                 rel_heights = c(.56,.44),
+#                       labels = c('','C'), 
+#                       label_size = 24, 
+#                       vjust = 1.2
+#                       )+ panel_border() 
+#   #)
+# }
+# 
+# )
+# # theme(plot.background = element_rect(color = "black")
+# plts
+```
+                     
+```{r, fig.width= 6, fig.height=8}
+# plts <- pmap(list(all_labvfld_hms[plt_nms], upst_strn_de_plts_fld_labB_gns[plt_nms]), ~{
+
+# plts <- pmap(list(all_labvfld_hms[c(9:12,14:28)], unlist(list(upst_strn_de_plts_fld_labB_gns[1:2], list(NULL), upst_strn_de_plts_fld_labB_gns[4], upst_strn_de_plts_fld_labB_gns[6:10], rep(list(NULL), 4), upst_strn_de_plts_fld_labB_gns[15:16], rep(list(NULL), 2), upst_strn_de_plts_fld_labB_gns[19], list(NULL)), recursive = F)), ~{
+pt_nms <- names(all_labvfld_hms[c(9:12,14:28)])
+
+upst_plts<- map(pt_nms, ~ifelse(.x %in% names(upst_strn_de_plts_fld_labB_gns), upst_strn_de_plts_fld_labB_gns[.x], no = list()))
+  
+plts <- pmap(list(all_labvfld_hms[pt_nms], unlist(upst_plts, recursive = F)), ~{
+ 
+  HM_gb = ggdraw(grid.grabExpr(draw(..1)))
+  plot_grid( HM_gb+
+               theme(plot.margin=margin(b=0.01,t=0.01,unit="cm")), 
+             ggdraw(..2) +
+               theme(plot.margin=margin(b=0.01,t=0.01,unit="cm")),
+             ncol=1,
+             rel_heights = c(.52,.480)
+  )+ panel_border() 
+  #)
+}
+
+)
+# theme(plot.background = element_rect(color = "black")
+plts
+```                  
+
+                    
+```{r, fig.width= 12, fig.height=10}
+hm_wk_de <- map(all_labvfld_hms_w_gns_labl[c("lf_StrainsDE_MSC1_f_don", "lf_StrainsDE_MSC3_f_don", "lf_StrainsDE_MSC13_f_don", "lf_StrainsDE_MSC1_m_don", "lf_StrainsDE_MSC13_m_don", "lf_StrainsDE_MSC14_m_don")], ~ggdraw(grid.grabExpr(draw(.x))))
+
+```              
+   
+                  
+```{r, fig.width= 12, fig.height=15}
+plot_grid(
+  plot_grid(
+  plotlist = hm_wk_de,
+  ncol = 2,
+  labels = c("A", "D", "B", "E", "C", "F"), 
+          label_size = 24, 
+          vjust = 1.1,
+  # rel_heights = c(.3,.3,.3),
+  byrow = F),
+plot_grid(fde_wk_ven, mde_wk_ven, labels = c("G", "H"), 
+          label_size = 24, 
+          vjust = 1.1),
+nrow = 2,
+rel_heights = c(.85, .15)
+)
+```           
+
+```{r, fig.width= 6, fig.height=8}
+pts_sigde <- pmap(list(all_labvfld_hms[c("lf_StrainsDE_MSC14_f", "lf_StrainsDE_MSC3_m")], upst_strn_de_plts_fld_labB_gns[c("lf_StrainsDE_MSC14_f", "lf_StrainsDE_MSC3_m")], fld_lab_de), ~{
+  HM_gb = ggdraw(grid.grabExpr(draw(..1)))
+  plot_grid( HM_gb + theme(plot.margin=margin(b=0.01,t=0.01,unit="cm")), 
+             plot_grid(
+               ggdraw(..2) + theme(plot.margin=margin(b=0.01,t=0.01,unit="cm")),
+               ..3, #+ coord_flip(),
+               ncol = 2,
+               rel_widths = c(.7, .3)
+               ),
+             ncol=1,
+             rel_heights = c(.52,.480)
+  )+ panel_border() 
+  #)
+}
+
+)
+# theme(plot.background = element_rect(color = "black")
+pts_sigde
+```                  
+
+```{r, results='asis', fig.height=16.5, fig.width=12}
+## Save RDS for concatenating to manuscript plot
+DE_go_gtpt <- readRDS("plots/DE_heatmaps/DE_go_gtpt.RDS")
+DE_go_sep_ont_gtpt <- readRDS("plots/DE_heatmaps/DE_go_sep_ont_gtpt.RDS")
+ont_lg <- readRDS("plots/DE_heatmaps/ont_lg.RDS")
+```
+
+```{r, fig.width= 6, fig.height=8}
+de_f_pt <- plot_grid( ggdraw(grid.grabExpr(draw(all_labvfld_hms[["lf_StrainsDE_MSC14_f_don3"]]))), 
+           ggdraw(upst_strn_de_plts_fld_labB_gns[["lf_StrainsDE_MSC14_f_don3"]]),
+           plot_grid(NULL, DE_go_sep_ont_gtpt[[1]], NULL, ncol = 3, rel_widths = c(.1,.8,.1))+ panel_border(),
+           nrow=3,
+           rel_heights = c(.45,.30,.25), 
+          labels = c('B','', 'D'), 
+          label_size = 24, 
+          vjust = 1.1
+  )+ panel_border() 
+  #)
+
+de_m_pt <- plot_grid( ggdraw(grid.grabExpr(draw(all_labvfld_hms[["lf_StrainsDE_MSC3_m_don"]]))), 
+           plot_grid(DE_go_sep_ont_gtpt[[2]], DE_go_sep_ont_gtpt[[3]], DE_go_sep_ont_gtpt[[4]], ncol = 3, rel_widths = c(.36,.33,.31))+ panel_border(),
+           nrow=2,
+           rel_heights = c(.55,.45), 
+          labels = c('C','E'), 
+          label_size = 24, 
+          vjust = 1.1
+  )+ panel_border() 
+
+
+```                 
+
+
+```{r, fig.width= 12, fig.height=12}
+plot_grid(
+plot_grid(
+  de_f_pt,
+  de_m_pt,
+  ncol = 2),
+ont_lg,
+plot_grid(plotlist = map(de_corr_plts[c("lf_StrainsDE_MSC14_f_don3","lf_StrainsDE_MSC3_m_don")], ~plot_grid(.x) + panel_border()), 
+          ncol = 2, 
+          labels = c('F','G'), 
+          # scale = 0.95, 
+          label_size = 24, 
+          vjust = 1.1),
+nrow = 3,
+rel_heights = c(.70,.04,.26)
+)
+
+```        
+
+
+```{r, fig.width= 6, fig.height=10}
+# de_f_pt <- plot_grid( ggdraw(grid.grabExpr(draw(all_labvfld_hms[["lf_StrainsDE_MSC14_f_don3"]]))), 
+#            ggdraw(upst_strn_de_plts_fld_labB_gns[["lf_StrainsDE_MSC14_f_don3"]]),
+#            plot_grid(NULL, DE_go_gtpt[[1]], NULL, ncol = 3, rel_widths = c(.15,.7,.15)),
+#            de_corr_plts[["lf_StrainsDE_MSC14_f_don3"]],
+#            nrow=4,
+#            rel_heights = c(.42,.28,.1, .3)
+#   )+ panel_border() 
+#   #)
+# 
+# de_m_pt <- plot_grid( ggdraw(grid.grabExpr(draw(all_labvfld_hms[["lf_StrainsDE_MSC3_m_don"]]))), 
+#            plot_grid(NULL, DE_go_gtpt[[2]], NULL, ncol = 3, rel_widths = c(.15,.7,.15)),
+#            de_corr_plts[["lf_StrainsDE_MSC3_m_don"]],
+#            nrow=3,
+#            rel_heights = c(.5,.2,.3)
+#   )+ panel_border() 
+# 
+# de_f_pt
+# de_m_pt
+```                 
+
+
+```{r, fig.width= 6, fig.height=8}
+pts_sigde_hc <- pmap(list(all_labvfld_hms[c("lf_StrainsDE_MSC14_f_don3", "lf_StrainsDE_MSC3_m_don")], c(upst_strn_de_plts_fld_labB_gns[c("lf_StrainsDE_MSC14_f_don3")],list(NULL))), ~{
+  HM_gb = ggdraw(grid.grabExpr(draw(..1)))
+  plot_grid( HM_gb+
+               theme(plot.margin=margin(b=0.01,t=0.01,unit="cm")), 
+             ggdraw(..2) +
+               theme(plot.margin=margin(b=0.01,t=0.01,unit="cm")),
+             ncol=1,
+             rel_heights = c(.52,.480)
+  )+ panel_border() 
+  #)
+}
+)
+
+pts_sigde_hc
+```                 
+    
+   
+ 
+```{r, fig.width= 6, fig.height=6}
+pts_sigde_lab <- pmap(list(all_labvfld_hms[c("lf_StrainsDE_M_NF54_7G8_f", "lf_StrainsDE_M_NF54_7G8_m")], fld_lab_de, list(c("A", "C"), c("B", "D"))), ~{
+  HM_gb = ggdraw(grid.grabExpr(draw(..1)))
+  plot_grid( HM_gb+
+               theme(plot.margin=margin(b=0.01,t=0.01,unit="cm")), 
+             ..2,
+             ncol=1,
+             rel_heights = c(.68,.32),
+             labels = ..3,
+             label_size = 24, 
+             vjust = 1.4
+  )+ panel_border() 
+  #)
+}
+)
+
+pts_sigde_lab
+```
+
+
+
+
+
+
+```{r, fig.width= 12, fig.height=9}
+plot_grid(
+plot_grid(plotlist = pts_sigde_lab,
+          ncol = 2, 
+          # labels = c('A','B'), 
+          # label_size = 24, 
+          vjust = 1.1),
+plot_grid(plotlist = map(de_corr_plts[c("lf_StrainsDE_M_NF54_7G8_f","lf_StrainsDE_M_NF54_7G8_m")], ~plot_grid(.x) + panel_border()), 
+          ncol = 2, 
+          labels = c('E','F'), 
+          # scale = 0.95, 
+          label_size = 24, 
+          vjust = 1.1),
+nrow = 2,
+rel_heights = c(.7,.3)
+)
+
+```        
+
+```{r, fig.width= 12, fig.height=16}
+plot_grid(plts[[1]], plts[[3]], plts[[5]], plts[[7]], nrow = 2, ncol =2, labels = c('A','B', 'C', 'D'), label_size = 24, vjust = 1.1)
+```      
+
+
+```{r, fig.width= 12, fig.height=16}
+plot_grid(plotlist = plts[c(2,4,6)], nrow = 2, ncol =2, labels = c('A','B', 'C', ''), label_size = 24, vjust = 1.1)
+```
+
+
+```{r, fig.width= 12, fig.height=8}
+plot_grid(plotlist = plts[c(7,4)], ncol = 2, labels = c('A','B'), label_size = 24, vjust = 1.1)
+```
+
+```{r, fig.width= 12, fig.height=10}
+plot_grid(
+plot_grid(plotlist = pts_sigde, ncol = 2, labels = c('C','D'), label_size = 24, vjust = 1.1),
+plot_grid(plotlist = de_corr_plts[c(15,12)], ncol = 2, labels = c('E','F'), scale = 0.95, label_size = 24, vjust = 1.1),
+nrow = 2,
+rel_heights = c(.7,.3)
+)
+```
+
+
+```{r, fig.width= 12, fig.height=10}
+plot_grid(
+plot_grid(plotlist = pts_sigde, ncol = 2, labels = c('C','D'), label_size = 24, vjust = 1.1),
+plot_grid(plotlist = de_corr_plts[c(15,12)], ncol = 2, labels = c('E','F'), scale = 0.95, label_size = 24, vjust = 1.1),
+nrow = 2,
+rel_heights = c(.7,.3)
+)
+```
+
+```{r}
+##Number of DE genes in genes present in both field and lab parasites
+mast_tde_corr_tbls[['lf_StrainsDE_MSC14_f']] %>% filter(gene_id %in% fld_labB_overlap_gns)%>% filter(p_val_adj < 0.05 & waldStat>10)%>% dplyr::filter(pw_comparison == 'SC5_vs_SC7') %>% dim
+
+##Number of DE genes in genes present in both field and lab parasites
+mast_tde_corr_tbls[['lf_StrainsDE_MSC14_f']] %>% filter(gene_id %in% fld_labB_overlap_gns)%>% filter(p_val_adj < 0.05 & waldStat>10)%>% dplyr::filter(pw_comparison == 'NF54_vs_7G8') %>% dim
+
+```
+
+
+Borderline significant MAST genes (p_val_adj < 0.05 & p_val_adj > 10e-4)
+Visualize
+```{r, eval=FALSE}
+## !! NB takes looooong
+border_sig_gns_plts <- stg_strn_mast_gns_smooth_plts(gn_xprsn_tbls = c(gn_tble_gg_smoother), 
+                                                     gns_strn = map(strns_ub_pairwise_mkrs_pt_ml_sst, 
+                                                                    . %>%
+                                                                      filter(p_val_adj < 0.05 & p_val_adj > 10e-4)  %>% 
+                                                                      arrange(p_val_adj) %>%
+                                                                      dplyr::select(gene_id, pw_comparison)), 
+                                                     stage_nms = names(strns_ub_pairwise_mkrs_pt_ml_sst), 
+                                                     comp_g = 'pw_comparison',
+                                                     ptimes = pts_sst,
+                                                     top_gns = 10)
+
+```
+
+Save bordeline significant genes
+```{r, eval=FALSE}
+## !! NB takes looooong
+stg_strn_mast_gns_smooth_plts_saver(plts_cnm = 'borderline_sig', plt_lst = border_sig_gns_plts)
+```
