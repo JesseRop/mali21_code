@@ -1,0 +1,2092 @@
+---
+title: "Functional GO enrichment analysis and comparison with findings in literature"
+date: '2022-09-10'
+author: 'Jesse Rop'
+output:
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+---
+
+```{r}
+suppressPackageStartupMessages({
+    library(Seurat)
+    library(dplyr) 
+    library(stringr)
+    library(purrr)
+    library(readr)
+    library(tibble)
+    library(ggplot2)
+    library(tidyr)
+    library(cowplot)
+    library(SeuratData)
+    library(SeuratDisk)
+    library(pheatmap)
+    library(plotly)
+    library(rmarkdown)
+    library(RColorBrewer)
+    library(MAST)
+    library(EnhancedVolcano)
+    # library(org.Pf.plasmo.db)
+    library(clusterProfiler) ##github installation newest version https://github.com/YuLab-SMU/clusterProfiler/issues/434#issuecomment-1048633162 remotes::install_github(c("YuLab-SMU/DOSE", "YuLab-SMU/clusterProfiler", "YuLab-SMU/enrichplot" ))
+    library(Platypus)
+    library(ggvenn)
+    library(tradeSeq)
+    library(MetBrewer)
+    library(ComplexHeatmap)
+    library(fgsea)
+    library(msigdbr)
+    library(slingshot)
+  library(enrichplot)
+  library(readxl)
+  library(DT)
+  library(knitr)
+  library(conflicted)
+  library(openxlsx)
+  library(gt)
+  library(ggforce)
+  conflicts_prefer(purrr::map)
+  conflicts_prefer(dplyr::filter)
+  conflicts_prefer(dplyr::rename)
+  # library(knitr)
+})
+```
+
+# DE within MSC14 field parasites and DE on MSC14 VS MCA V3 parasites
+
+## Variable declarations, read in input files and exploratory visualizations
+
+```{r setup}
+##Set working directory
+knitr::opts_knit$set(root.dir = '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali/')
+##Get common resources
+```
+
+```{r}
+##Metadata from all p.falciparum genes downloaded from plasmoDB
+Pf3D7_genes_plasmoDB <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3d7_Genes_Summary_270922.csv") %>% 
+  dplyr::rename("gene_id" = `Gene ID` ) %>% 
+  group_by(gene_id) %>% 
+  add_count(name='gn_iso') %>% 
+  ungroup() %>%
+  mutate(across(gene_id, ~case_when(gn_iso>1 ~ source_id,
+                                    TRUE ~ as.character(.)))) %>% 
+  mutate(across(gene_id, ~str_replace(.,"_", "-")))%>%
+  dplyr::rename('Gene_name' = `Gene Name or Symbol`, 'Ka_Ks' = `NonSyn/Syn SNP Ratio All Strains`, 'TM_domains'=`# TM Domains`) %>% 
+  mutate(across(where(is.character), ~na_if(., "N/A")),
+         Gene = coalesce(`Gene_name`, gene_id)
+  )  %>%
+  group_by(Gene) %>% 
+  add_count() %>% 
+  ungroup() %>%
+  mutate(across(Gene, ~case_when(n>1 ~ paste0(.,'_', gene_id),
+                                 TRUE ~ as.character(.)))) 
+```
+
+```{r}
+##Get common resources
+# source('scripts/msc_common_functions.R')
+```
+
+```{r}
+##Assign colour variables for the different plots
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   # 'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   'Female'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   ## 'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Male'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle'
+)
+
+monet_col <- met.brewer('Monet',9,override.order = T)
+col_branches1 = c("commited"= monet_col[4],
+                 "developing"=monet_col[5],
+                 "branching"=monet_col[6],"early female"=monet_col[2],
+                 "early male"=monet_col[8],"late female"=monet_col[1],"late male"=monet_col[7])
+
+```
+
+
+```{r, message=FALSE}
+##Metadata from all p.falciparum genes downloaded from plasmoDB
+Pf3D7_genes_plasmoDB_go <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3d7_Genes_Summary_190322.csv") %>%
+    dplyr::rename("gene_id" = `Gene ID` ) %>%
+    group_by(gene_id) %>%
+    add_count(name='gn_iso') %>%
+    ungroup() %>%
+    mutate(across(gene_id, ~case_when(gn_iso>1 ~ source_id,
+                                   TRUE ~ as.character(.)))) %>%
+    mutate(across(gene_id, ~str_replace(.,"_", "-")))%>%
+    dplyr::rename('Gene_name' = `Gene Name or Symbol`, 'Ka_Ks' = `NonSyn/Syn SNP Ratio All Strains`, 'TM_domains'=`# TM Domains`) %>%
+    mutate(across(where(is.character), ~na_if(., "N/A")),
+           Gene = coalesce(`Gene_name`, gene_id)
+    )  %>%
+    group_by(Gene) %>%
+    add_count() %>%
+  ungroup() %>%
+  mutate(across(Gene, ~case_when(n>1 ~ paste0(.,'_', gene_id),
+                                   TRUE ~ as.character(.))))
+
+```
+
+```{r}
+##Field datasets (msc1,3,13,14,1272C)
+sample_id_lst <-as.list(c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" ) %>% 
+    str_sort(., numeric = T))
+
+# sample_id_lst <-sample_id_lst[4]
+
+msc_qcd_anotd_stgstrqc <- readRDS('data/processed/DB52e_star/msc_qcd_anotd.RDS') #%>% 
+  # set_names(sample_id_lst)
+
+msc_qcd_anotd_stgstrqc <- msc_qcd_anotd_stgstrqc[1:4]
+
+```
+
+```{r}
+##Field datasets (msc1,3,13,14,1272C)
+# mast_tde_corr_tbls <- readRDS('data/processed/msc14/5736STDY11771546_DB52e_star/mast_tde_corr_tbls.RDS')
+mast_tde_corr_tbls <- readRDS('data/processed/DB52e_star/mast_tde_corr_tbls.RDS')
+```
+
+```{r}
+##Field datasets (msc1,3,13,14,1272C)
+msc_g_noLE_condRes_ub_de <- readRDS('data/processed/DB52e_star/msc_g_noLE_condRes_ub_de.RDS')
+```
+
+Read in tradeseq files from local
+```{r}
+# msc14_ref_ts_sce <- readRDS('data/processed/msc14/5736STDY11771546_DB52e_star/pseudotime_tradeseq/msc14_ref_ts_sce.RDS')
+msc_g_noLE_v3_combi_strn_mast <- readRDS('data/processed/DB52e_star/msc_g_noLE_v3_combi_strn_mast.RDS')
+```
+
+### Exploratory Visualization
+#### Field parasites UMAP split by strain {.tabset}
+```{r, results='asis', fig.width=12, fig.height=3.5}
+# cat('## Visualize field parasites {.tabset}   \n')
+  msc_qcd_anotd_stgstrqc  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('##### Tab',.y,'   \n')
+        p <- DimPlot(.x, reduction = "umap",  split.by = 'Strain_DN', group.by = 'stageHL', 
+        cols = sp_fld_colors, pt.size = 1.5)  + 
+          theme(axis.text=element_text(size=18), 
+      axis.title=element_text(size=20,face="bold"), 
+      # legend.text = element_blank(), 
+      plot.title = element_blank(),
+      strip.text.x = element_text(size = 24, face = "bold") )
+        print(p)
+        cat('\n  ')
+        cat("\n")
+      })
+
+```
+
+
+## MSC DE
+
+### female (high count VS low count) and male (high count VS low count)
+
+#### Female high vs female low DE list with annotation {.tabset}
+```{r}
+##female
+# fh_fl_marker_list_acc_strn_3.13.14 <- readRDS( "data/processed/fh_fl_marker_list_acc_strn_3.13.14.RDS") %>% 
+  # set_names(sample_id_lst[2:4])
+fh_fl_marker_list_acc_strn_3.13.14 <- readRDS( "data/processed/DB52e_star/fh_fl_marker_list_acc_strn_3.13.14.RDS") 
+
+fh_fl_marker_list_acc_strn_3.13.14 <- fh_fl_marker_list_acc_strn_3.13.14 %>%
+    map(. %>% rownames_to_column('gene_id') %>% 
+            left_join(.,Pf3D7_genes_plasmoDB, by = 'gene_id') %>%
+          arrange(desc(avg_log2FC)) %>%
+          dplyr::select(Gene,gene_id, p_val,  avg_log2FC, pct.1, pct.2, p_val_adj, `Product Description`, Ka_Ks,TM_domains, `Computed GO Components`, `Computed GO Functions`, `Computed GO Processes`,`Curated GO Components`, `Curated GO Functions`, `Curated GO Processes`, `# Exons in Gene`,`Annotated 3' UTR length`,`Annotated 5' UTR length`,`Gene Strand`,`Gene Type`, `CDS Length`))
+
+```
+
+```{r, results='asis', eval=F}
+##This code only runs when knitting. when running the chunks we get the error, 'Error in cat(knitr::knit_print(.x %>% head(., n = 50))) : argument 1 (type 'list') cannot be handled by 'cat'
+data.frame() %>%
+  DT::datatable() %>%
+  knitr::knit_print() %>%
+  attr('knit_meta') %>%
+  knitr::knit_meta_add() %>%
+  invisible()
+
+
+imap(fh_fl_marker_list_acc_strn_3.13.14, ~{
+      cat('##### ',.y,'\n')
+      cat('Upregulated in Female \n')
+      cat('\n')
+      cat(knitr::knit_print(.x%>% head(., n=50) ))
+      
+      cat('Upregulated in Female (LE) \n')
+      cat(knitr::knit_print(.x%>% tail(., n=50)))
+      cat('\n')})
+```
+
+
+#### male (high count VS low count) DE with annotation {.tabset}
+```{r}
+##male
+mh_ml_marker_list_acc_strn_13.14 <- readRDS( "data/processed/DB52e_star/mh_ml_marker_list_acc_strn_13.14.RDS") 
+
+mh_ml_marker_list_acc_strn_13.14 <- mh_ml_marker_list_acc_strn_13.14 %>%
+    map(. %>% rownames_to_column('gene_id') %>% 
+            left_join(.,Pf3D7_genes_plasmoDB, by = 'gene_id') %>%
+          arrange(desc(avg_log2FC)) %>%
+          dplyr::select(Gene,gene_id, p_val,  avg_log2FC, pct.1, pct.2, p_val_adj,gene_id, `Product Description`, Ka_Ks,TM_domains, `Computed GO Components`, `Computed GO Functions`, `Computed GO Processes`,`Curated GO Components`, `Curated GO Functions`, `Curated GO Processes`, `# Exons in Gene`,`Annotated 3' UTR length`,`Annotated 5' UTR length`,`Gene Strand`,`Gene Type`, `CDS Length`))
+```
+
+```{r, results='asis', eval=FALSE}
+##This code only runs when knitting. when running the chunks we get the error, 'Error in cat(knitr::knit_print(.x %>% head(., n = 50))) : argument 1 (type 'list') cannot be handled by 'cat'
+data.frame() %>%
+  DT::datatable() %>%
+  knitr::knit_print() %>%
+  attr('knit_meta') %>%
+  knitr::knit_meta_add() %>%
+  invisible()
+
+
+imap(mh_ml_marker_list_acc_strn_13.14, ~{
+      cat('##### ',.y,'\n')
+      cat('Upregulated in Female \n')
+      cat('\n')
+      cat(knitr::knit_print(.x%>% head(., n=50) ))
+      
+      cat('Upregulated in Female (LE) \n')
+      cat(knitr::knit_print(.x%>% tail(., n=50)))
+      cat('\n')})
+```
+
+
+### Average expression of gene sets
+
+Function 
+```{r}
+makeSetScore <- function(seur, gene.set,assay='RNA', slt = 'counts') {
+  # Get mean expression of genes of interest per cell
+  mean.exp <- colMeans(x = as.matrix(GetAssayData(seur, slot = slt, assay = assay))[gene.set, ], na.rm = TRUE)
+  
+  # Add mean expression values in 'object@meta.data$gene.set.score'
+  if (all(names(x = mean.exp) == rownames(x = seur@meta.data))) {
+    return(mean.exp)
+  }
+}
+
+```
+
+
+Function avg expression across all cell per gene
+```{r}
+# per_gn_all_cells_makeSetScore <- function(seur, gene.set,assay='RNA') {
+#   # Get mean expression of genes of interest across all cells
+#   mean.exp <- rowMeans(x = as.matrix(GetAssayData(seur, slot = 'data', assay = assay))[gene.set, ], na.rm = TRUE)
+#   
+#   # Add mean expression values in 'object@meta.data$gene.set.score'
+#   if (all(names(x = mean.exp) == rownames(x = seur@meta.data))) {
+#     return(mean.exp)
+#   }
+# }
+
+```
+
+#### Average expression of 511 Lasonder translationally repressed genes in MSC {.tabset}
+```{r, message=FALSE}
+lasonder_tr <- read_xlsx('data/raw/published_lit/lasonder/supp_512_TR_genes.xlsx', skip = 4)
+tr_gns <- lasonder_tr %>% dplyr::rename('gene_id' = `Gene ID...1`) %>% pull(gene_id) %>% str_replace(.,'_', '-')
+tr_gns <- tr_gns[str_detect(tr_gns, 'PF3D7-')]
+```
+
+
+```{r}
+
+lasonder_avg_exp <- msc_qcd_anotd_stgstrqc %>%
+  map(~makeSetScore(., tr_gns, assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('lasonder_avg') 
+      )
+
+msc_qcd_anotd_stgstrqc <- list(msc_qcd_anotd_stgstrqc, lasonder_avg_exp) %>%
+  pmap(~AddMetaData(..1, ..2))
+```
+
+
+```{r, results='asis', message=FALSE}
+lasonder_avg_umap <-  msc_qcd_anotd_stgstrqc  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('##### ',.y,'   \n')
+        p <- FeaturePlot(., features = "lasonder_avg", dims = c(1,2), label = T, label.size = 4, repel = T) + scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+ 
+            theme(axis.text=element_text(size=12), 
+                  axis.title=element_text(size=12,face="bold"), 
+                  plot.title = element_blank(),
+                  legend.text = element_text(size=12),
+                  legend.position="bottom",
+                  legend.key.width = unit(1, "cm")
+            )+
+            coord_fixed() 
+        print(p)
+        cat('\n')
+        cat("\n")
+      })
+
+lasonder_avg_umap
+```
+
+
+```{r, results='asis', message=FALSE}
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.2, "cm")
+)
+
+lasonder_avg_umap <-  msc_qcd_anotd_stgstrqc  %>% 
+      purrr::imap(.,~{
+        # create tabset for each group 
+        cat('##### ',.y,'   \n')
+        #p<-do_FeaturePlot(., features = "lasonder_avg", dims = c(1,2),  label.size = 4,label = T,repel = T,label.color = "black") + 
+        p<-FeaturePlot(., features = "lasonder_avg", dims = c(1,2),label = T,repel = T, label.size = 5) +
+          scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+
+              theme_classic() +
+              theme(#axis.text=element_text(size=18), 
+                    #axis.title=element_text(size=18,face="bold"), 
+                    legend.text = element_text(size=20),
+                    legend.position="bottom",
+                    legend.title =element_blank(),
+                    plot.title = element_blank(),
+                    axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed")),
+        axis.title = element_text(hjust = 0))+
+  scale_x_continuous(breaks = NULL) +
+  scale_y_continuous(breaks = NULL)+
+              # coord_fixed()+
+        guides(color = guide_colorbar(barwidth = 10, barheight =0.6),
+         x= trunc_axis,
+         y= trunc_axis)
+        return(p)
+        # print(p)
+        cat('\n')
+        cat("\n")
+      })
+
+
+lasonder_avg_umap
+```
+
+
+##### Female LE, HE, Male LE, HE absence/present genes (detected in 25% of the population) overrepresentation test {.tabset}
+
+```{r}
+## Copy the gene lists to make do GO overrepresentation test
+mfet_gns_3.13.14_don_colps<- readRDS("data/processed/DB52e_star/msc14/mf_le_he/mfet_gns_3.13.14_don_colps.RDS")
+mfet_gns_3.13.14_lst<- readRDS("data/processed/DB52e_star/msc14/mf_le_he/mfet_gns_3.13.14_lst.RDS")
+```
+
+
+Avg expression of FLE genes in all clusters
+
+
+```{r}
+mfet_gns_3.13.14_don_colps %>% filter(fh_fl_only == 'y') %>% dim
+fhe_fle_gns <- mfet_gns_3.13.14_don_colps %>% filter(fh_fl_only == 'y') %>% pull(gene_id)
+
+fhe_fle_avg_exp <- msc_qcd_anotd_stgstrqc[2:4] %>%
+  map(~makeSetScore(., fhe_fle_gns, assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('fhe_fle_avg') 
+      )
+
+msc_qcd_anotd_stgstrqc[2:4] <- list(msc_qcd_anotd_stgstrqc[2:4], fhe_fle_avg_exp) %>%
+  pmap(~AddMetaData(..1, ..2))
+```
+
+```{r, results='asis', message=FALSE}
+
+fhe_fle_umap <-  msc_qcd_anotd_stgstrqc[2:4]  %>% 
+      purrr::imap(.,~{
+        # create tabset for each group 
+        cat('##### ',.y,'   \n')
+        #p<-do_FeaturePlot(., features = "lasonder_avg", dims = c(1,2),  label.size = 4,label = T,repel = T,label.color = "black") + 
+        p<-FeaturePlot(., features = "fhe_fle_avg", dims = c(1,2),label = T,repel = T, label.size = 5) +
+          scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+
+              theme_classic() +
+              theme(#axis.text=element_text(size=18), 
+                    #axis.title=element_text(size=18,face="bold"), 
+                    legend.text = element_text(size=20),
+                    legend.position="bottom",
+                    legend.title =element_blank(),
+                    plot.title = element_blank(),
+                    axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed")),
+        axis.title = element_text(hjust = 0))+
+  scale_x_continuous(breaks = NULL) +
+  scale_y_continuous(breaks = NULL)+
+              # coord_fixed()+
+        guides(color = guide_colorbar(barwidth = 10, barheight =0.6),
+         x= trunc_axis,
+         y= trunc_axis)
+        return(p)
+        # print(p)
+        cat('\n')
+        cat("\n")
+      })
+
+
+fhe_fle_umap
+```
+
+
+```{r, results='asis', message=FALSE}
+# msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% ggplot(aes(x = stageHL, y = fhe_fle_avg)) + geom_boxplot()
+```
+
+
+```{r}
+mfet_gns_3.13.14_don_colps %>% filter(mh_ml_only == 'y') %>% dim
+mhe_mle_gns <- mfet_gns_3.13.14_don_colps %>% filter(mh_ml_only == 'y') %>% pull(gene_id)
+
+mhe_mle_avg_exp <- msc_qcd_anotd_stgstrqc[3:4] %>%
+  map(~makeSetScore(., mhe_mle_gns, assay = 'RNA') %>% 
+        data.frame %>% 
+        setNames('mhe_mle_avg') 
+      )
+
+msc_qcd_anotd_stgstrqc[3:4] <- list(msc_qcd_anotd_stgstrqc[3:4], mhe_mle_avg_exp) %>%
+  pmap(~AddMetaData(..1, ..2))
+```
+
+```{r, results='asis', message=FALSE}
+
+mhe_mle_umap <-  msc_qcd_anotd_stgstrqc[3:4]  %>% 
+      purrr::imap(.,~{
+        # create tabset for each group 
+        cat('##### ',.y,'   \n')
+        #p<-do_FeaturePlot(., features = "lasonder_avg", dims = c(1,2),  label.size = 4,label = T,repel = T,label.color = "black") + 
+        p<-FeaturePlot(., features = "mhe_mle_avg", dims = c(1,2),label = T,repel = T, label.size = 5) +
+          scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))+
+              theme_classic() +
+              theme(#axis.text=element_text(size=18), 
+                    #axis.title=element_text(size=18,face="bold"), 
+                    legend.text = element_text(size=20),
+                    legend.position="bottom",
+                    legend.title =element_blank(),
+                    plot.title = element_blank(),
+                    axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed")),
+        axis.title = element_text(hjust = 0))+
+  scale_x_continuous(breaks = NULL) +
+  scale_y_continuous(breaks = NULL)+
+              # coord_fixed()+
+        guides(color = guide_colorbar(barwidth = 10, barheight =0.6),
+         x= trunc_axis,
+         y= trunc_axis)
+        return(p)
+        # print(p)
+        cat('\n')
+        cat("\n")
+      })
+
+
+mhe_mle_umap
+```
+
+```{r, results='asis', message=FALSE}
+barp_theme <- theme(axis.text.x = element_blank(),
+        axis.title=element_text(size=16,face="plain"), 
+        axis.text = element_text(size=15), 
+        axis.ticks.x = element_blank(),
+        strip.text =element_text(size=16,face="plain", colour = 'black'),
+        panel.border=element_rect(colour="black",fill='transparent'),
+        legend.title = element_text(size=16,face="bold"),
+        legend.text = element_text(size=15),
+        legend.position = 'bottom')
+
+ffl_core_gns_barp <- msc_qcd_anotd_stgstrqc[2:4]  %>% 
+  map(., ~.x@meta.data)%>% 
+  bind_rows(. , .id = "donor") %>%
+  mutate(across(donor, ~droplevels(factor(., levels = sample_id_lst)))) %>%
+  ggplot(aes(x=stageHL, y = fhe_fle_avg)) +
+  geom_boxplot()+
+  geom_sina(size = 0.2) +
+  facet_wrap(. ~ donor, scales = "free_x")+
+  geom_tile(aes(x = stageHL, y = -1, fill = stageHL, height = 0.9)) +
+  scale_fill_manual(values = sp_fld_colors)+
+  labs(x = "Stage", y = "F+FL core \ngenes avg. \nexpression")+
+  theme_classic() +
+  barp_theme +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+      
+mml_core_gns_barp <- msc_qcd_anotd_stgstrqc[3:4]  %>% 
+  map(., ~.x@meta.data)%>% 
+  bind_rows(. , .id = "donor") %>%
+  mutate(across(donor, ~droplevels(factor(., levels = sample_id_lst)))) %>%
+  ggplot(aes(x=stageHL, y = mhe_mle_avg)) +
+  geom_boxplot()+
+  geom_sina(size = 0.2) +
+  facet_wrap(. ~ donor, scales = "free_x") +
+  geom_tile(aes(x = stageHL, y = -0.5, fill = stageHL, height = 0.4)) +
+  scale_fill_manual(values = sp_fld_colors)+
+  labs(x = "Stage", y = "M+ML core \ngenes avg. \nexpression")+
+  theme_classic()+
+  barp_theme +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+  
+      
+ffl_core_gns_barp
+mml_core_gns_barp
+```
+
+```{r, results='asis', message=FALSE}
+msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% filter(str_detect(stageHL, 'Female')) %>% rownames_to_column('gene_id') %>% mutate(across(gene_id, factor)) %>% ggplot(aes(x = stageHL, y = fhe_fle_avg)) + geom_boxplot() + geom_line(aes( group = gene_id))+ geom_point(aes(group=gene_id))
+```
+
+
+```{r}
+fhe_avg <- rowMeans(as.matrix(GetAssayData(msc_qcd_anotd_stgstrqc[[4]], slot = 'data', assay = 'RNA'))[fhe_fle_gns, msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% filter(stageHL == 'Female') %>% rownames()], na.rm = TRUE)
+fle_avg <- rowMeans(as.matrix(GetAssayData(msc_qcd_anotd_stgstrqc[[4]], slot = 'data', assay = 'RNA'))[fhe_fle_gns, msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% filter(stageHL == 'Female (LE)') %>% rownames()], na.rm = TRUE)
+
+list(fhe_avg, fle_avg) %>% set_names(str_remove(c('fhe_avg', 'fle_avg'), '_avg')) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols  %>% rownames_to_column('gene_id') %>% ggplot(aes(x=fle, y=fhe)) + geom_point() + labs(x = 'Female (LE)', y = 'Female') + geom_abline() + theme_classic() + theme(axis.text = element_text(size = 15), axis.title = element_text(size = 16)) 
+
+```
+
+```{r}
+fhe_avg <- rowMeans(as.matrix(GetAssayData(msc_qcd_anotd_stgstrqc[[4]], slot = 'counts', assay = 'RNA'))[fhe_fle_gns, msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% filter(stageHL == 'Female') %>% rownames()], na.rm = TRUE)
+fle_avg <- rowMeans(as.matrix(GetAssayData(msc_qcd_anotd_stgstrqc[[4]], slot = 'counts', assay = 'RNA'))[fhe_fle_gns, msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% filter(stageHL == 'Female (LE)') %>% rownames()], na.rm = TRUE)
+
+list(fhe_avg, fle_avg) %>% set_names(str_remove(c('fhe_avg', 'fle_avg'), '_avg')) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols  %>% rownames_to_column('gene_id') %>% ggplot(aes(x=fle, y=fhe)) + geom_point() + labs(x = 'Female (LE)', y = 'Female') + geom_abline() + theme_classic() + theme(axis.text = element_text(size = 15), axis.title = element_text(size = 16)) 
+
+```
+
+
+
+```{r}
+fhe_avg <- rowMeans(as.matrix(GetAssayData(msc_qcd_anotd_stgstrqc[[4]], slot = 'data', assay = 'RNA'))[fhe_fle_gns, msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% filter(stageHL == 'Female') %>% rownames()], na.rm = TRUE)
+fle_avg <- rowMeans(as.matrix(GetAssayData(msc_qcd_anotd_stgstrqc[[4]], slot = 'data', assay = 'RNA'))[fhe_fle_gns, msc_qcd_anotd_stgstrqc[[4]]@meta.data %>% filter(stageHL == 'Female (LE)') %>% rownames()], na.rm = TRUE)
+
+list(fhe_avg, fle_avg) %>% set_names(str_remove(c('fhe_avg', 'fle_avg'), '_avg')) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols  %>% rownames_to_column('gene_id') %>% ggplot(aes(x=fle, y=fhe)) + geom_point() + labs(x = 'Female (LE)', y = 'Female') + geom_abline() + theme_classic() + theme(axis.text = element_text(size = 15), axis.title = element_text(size = 16)) 
+
+# list(fhe_avg, fle_avg) bind_cols(fhe_avg, fle_avg) 
+
+# rowMeans(x = as.matrix(GetAssayData(msc_qcd_anotd_stgstrqc[[4]], slot = 'data', assay = assay))[gene.set, ], na.rm = TRUE)
+```
+
+
+
+```{r}
+##Average expression of a gene in each stage
+##stage variables
+# stgs <- c('Late ring','Early trophozoite' ,'Female', 'Female (LE)', 'Male', 'Male (LE)')
+stg_key <- c('Late ring' = 'LT', 'Early trophozoite' = 'ET' , 'Female' = 'F', 'Female (LE)' = 'FLE', 'Male' = 'M', 'Male (LE)' = 'MLE', 'Gametocyte (female)' = 'GF', 'Gametocyte (male)' = 'GM')
+
+##get avg expression
+stg_expr_cellProp_lst <- pmap(list(msc_qcd_anotd_stgstrqc), ~{
+  dset <- ..1
+  stg <- as.character(unique(dset@meta.data$stageHL_ref))
+  print(stg)
+  stg_nms <- stg_key[stg]
+  print(stg_nms)
+    
+    ex <- map(stg, ~rowMeans(as.matrix(GetAssayData(dset, slot = 'data', assay = 'RNA'))[, dset@meta.data %>% filter(stageHL_ref == .x) %>% rownames()], na.rm = TRUE)) %>% 
+    set_names(paste0(stg_nms, "_exp")) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols  %>% rownames_to_column('gene_id')
+    
+    cp <- map(stg, ~rowSums(as.matrix(GetAssayData(dset, slot = 'data', assay = 'RNA'))[, dset@meta.data %>% filter(stageHL_ref == .x) %>% rownames()] > 0)/ length(dset@meta.data %>% filter(stageHL_ref == .x) %>% rownames())) %>% 
+    set_names(paste0(stg_nms, "_celProp")) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols  %>% rownames_to_column('gene_id')
+    
+    ex_cp_df <- left_join(ex, cp, by = 'gene_id') %>% mutate(lasonder = ifelse(gene_id %in% tr_gns, 'y', 'n'))
+    
+  }) 
+
+```
+
+
+
+```{r}
+## Average expression of a gene in each strain stage (AFM) combination
+ss_stg_expr_cellProp_lst <- pmap(list(msc_qcd_anotd_stgstrqc), ~{
+    dset <- ..1
+    strn_stg <- dset@meta.data %>% dplyr::count(Strain_DN, stage_afm) %>% dplyr::select(-c(n)) %>% as.list()
+    strn_stg_nms <- pmap(strn_stg, ~paste(..1, ..2, sep = '_'))
+  
+    ##get cells of interest
+    ss_bcodes <- pmap(strn_stg, ~{dset@meta.data %>% filter(Strain_DN == ..1 & stage_afm == ..2) %>% rownames()})
+
+    # print(strn_stg_nms)
+    
+    ##get avg expression
+    ss_exp <- map(ss_bcodes, ~{GetAssayData(dset, slot = 'data', assay = 'RNA')[, .x] %>% as.matrix() %>% rowMeans(., na.rm = TRUE)}) %>% 
+      set_names(paste0(strn_stg_nms, '_exp')) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols  %>% rownames_to_column('gene_id')
+    
+    ##Proportion of cells in each stage expressing a gene
+    ss_prop_w_gn <-map(ss_bcodes, ~{rowSums(as.matrix(GetAssayData(dset, slot = 'data', assay = 'RNA')[, .x])> 0)/length(.x)}) %>% 
+      set_names(paste0(strn_stg_nms, '_celProp')) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols  %>% rownames_to_column('gene_id')
+    
+    ##Number instead of proportion
+    # ss_num_w_gn <-map(ss_bcodes, ~{rowSums(as.matrix(GetAssayData(dset, slot = 'data', assay = 'RNA')[, .x])> 0)}) %>% 
+    #   set_names(strn_stg_nms) %>% imap(., ~data.frame(.x) %>% set_names(.y)) %>% bind_cols  %>% rownames_to_column('gene_id')
+    
+    
+    ##Merge
+    ss_stg_expr_cellProp <- left_join(ss_exp, ss_prop_w_gn, by = 'gene_id') %>% mutate(lasonder = ifelse(gene_id %in% tr_gns, 'y', 'n'))
+
+  }) 
+
+```
+
+
+```{r}
+##gametocyte commiited rings genes paper https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7710746/
+Pf3D7_genes_plasmoDB %>% filter(Gene %in% str_to_upper(c('ap2-g', 'hda', 'arom', 'lsd2', 'rga', 'PF3D7-0406500', 'ep1', 'PF3D7-0113400', 'PF3D7-1252500', 'surf13.1', 'surf1.2', 'surf4.2', 'Rfge7', 'gexp5', 'vap1', 'tra3', 'msrp1', 'cpp', 'nat', 'sbp1', 'kahrp'))) %>% pull(Gene)
+```
+
+## GO and GSEA analysis of DE genes
+
+### GO enrichment function for gene table from plasmoDb
+Term2gene and term2name files generated manually in dplyr. Allows the computation of GO enrichment for 'function', 'component' and 'processes' separately generating results for each
+
+GO table preparation from plasmodb gene table 
+
+
+```{r}
+
+go_tbl_prep <- function(go_term = 'Function', sufx = 's'){
+  go_tbl <- Pf3D7_genes_plasmoDB_go[c('gene_id', paste0(c(rep('Curated ', 2), rep('Computed ',2)), rep('GO ', 4),go_term, c(sufx, ' '), c('','IDs')))] %>% 
+    pivot_longer(-c('gene_id'),
+                   names_to = c( "method_cc",".value"),
+                   names_pattern = "(C.*d) (G.*)")  %>% 
+    rename_all(., ~str_remove(., 'GO ')) %>% 
+    separate_rows(., c(contains('IDs'), contains(paste0(go_term, sufx))), sep=';') %>%
+    distinct(., .keep_all = T) %>% 
+    filter(!if_all(contains(paste0(go_term, sufx)), ~is.na(.))) %>% 
+    dplyr::rename("Gene"= gene_id, "TERM" = paste0(go_term, sufx), "GO" = paste0(go_term, ' IDs'))
+  
+  go_gaf <- list('TERM2GENE' = go_tbl %>% dplyr::select(GO,Gene) %>% distinct(., .keep_all = T), 'TERM2NAME'= go_tbl %>% dplyr::select(GO,TERM) %>% dplyr::rename("GOID"= GO) %>% distinct(., .keep_all = T)) 
+
+}
+
+
+```
+
+
+GO enrichment function - calculates GO overrepresentation for upregulated and downregulated genes and also GSEA using lfc
+```{r}
+
+go_e_fun  <- function(dset_lst, dset_lst_full, t2gn_lst, lst_names, unvrs){
+  
+  field_overGO <- dset_lst %>% 
+    filter(avg_log2FC>0 ) %>%
+    pull(gene_id) %>%  
+    enricher(., TERM2GENE = t2gn_lst$TERM2GENE, TERM2NAME=t2gn_lst$TERM2NAME, universe = unvrs)
+  
+  lab_overGO <- dset_lst %>% 
+    filter(avg_log2FC<0 ) %>%
+    pull(gene_id) %>% 
+    enricher(., TERM2GENE = t2gn_lst$TERM2GENE, TERM2NAME=t2gn_lst$TERM2NAME, universe = unvrs)
+  
+  f_vs_l <- dset_lst_full %>% 
+    dplyr::select(gene_id,avg_log2FC) %>% 
+    filter(!is.na(avg_log2FC)) %>%
+    arrange(desc(avg_log2FC)) %>%
+    # rownames_to_column() %>% 
+    # filter(rowname %in% go_tbl$gene_id) %>% 
+    deframe()
+  
+  print(str(f_vs_l))
+  
+  ## Filtering out genes based on Pvalue may reduce power of the analysis https://www.biostars.org/p/247647/ & https://resources.qiagenbioinformatics.com/manuals/clcgenomicsworkbench/650/Gene_set_enrichment_analysis.html
+  gsea = GSEA(f_vs_l , TERM2GENE = t2gn_lst$TERM2GENE, TERM2NAME=t2gn_lst$TERM2NAME, pvalueCutoff = 0.05)
+  
+  go_e_lst <- list(field_overGO, lab_overGO, gsea) %>% set_names(lst_names)
+  return(go_e_lst)
+
+}
+
+```
+
+GO enrichment function for set of genes and universe - same as above but only for over-representation 
+```{r}
+go_e_fun_overrep_only  <- function(gns, unvrs, t2gn_lst){
+  
+  overGO <- gns %>%  
+    enricher(., TERM2GENE = t2gn_lst$TERM2GENE, TERM2NAME=t2gn_lst$TERM2NAME, universe = unvrs)
+  
+    return(overGO)
+
+}
+
+```
+
+```{r}
+go_e_fun_overrep_only_fcp  <- function(gns, unvrs, t2gn_lst){
+ 
+  map(list(Pf3D7_66_gaf_F, Pf3D7_66_gaf_C, Pf3D7_66_gaf_P), ~enricher(gns, TERM2GENE = .x$TERM2GENE, TERM2NAME=.x$TERM2NAME, universe = unvrs) %>% .@result %>% filter(p.adjust<0.05)) %>%
+            set_names(c('Molecular function', 'Cellular component', 'Biological process')) %>%
+            bind_rows(., .id='Ontology')
+  
+
+}
+
+
+
+```
+
+
+#### Function GO enrichment {.tabset}
+
+```{r}
+field_lab_exprsn <- map(msc_g_noLE_v3_combi_strn_mast[1:8], ~rownames(.)[(rowSums(.@assays$RNA@counts) > 0)])
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+## !!!!! NB WRONG - NEED TO RERUN FULL MAST DE IN THE 'msc_FvL_strain_DE ....' notbook
+# strns_ub_pairwise_mkrs_pt_ml_gsea_full<- readRDS('data/processed/msc14/5736STDY11771546_DB52e_star/strns_ub_pairwise_mkrs_pt_ml_gsea_full.RDS')
+strns_ub_pairwise_mkrs_pt_ml <- readRDS('data/processed/DB52e_star/strns_ub_pairwise_mkrs_pt_ml.RDS')
+strns_ub_pairwise_mkrs_pt_ml_gsea_full <- strns_ub_pairwise_mkrs_pt_ml
+```
+
+```{r, message=FALSE}
+go_tbl_functions <- go_tbl_prep(go_term = 'Function', sufx = 's')
+
+go_function = list(mast_tde_corr_tbls[1:8]  %>% map(.  %>% filter(!is.na(avg_log2FC) & p_val_adj<0.05 & waldStat >10)),
+                   strns_ub_pairwise_mkrs_pt_ml_gsea_full[1:8],
+                     field_lab_exprsn) %>%
+  pmap(., ~go_e_fun(dset_lst = ..1, dset_lst_full = ..2, t2gn_lst= go_tbl_functions, lst_names = c('field_overGO', 'lab_overGO', 'fieldVSlab_gsea'), unvrs = ..3))
+
+```
+
+
+
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+unlist(go_function)  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('##### ',.y,'   \n')
+        tryCatch(
+          print(enrichplot::dotplot(.x)), 
+          error = function(e){function() 'No overepresented GO terms'})
+        cat('\n \n \n ')
+        cat("\n\n\n")
+      })
+
+```
+
+
+#### Components GO enrichment {.tabset}
+```{r, message=FALSE}
+go_tbl_components <- go_tbl_prep(go_term = 'Component', sufx = 's')
+
+go_components = list(mast_tde_corr_tbls[1:8]  %>% map(.  %>% filter(!is.na(avg_log2FC)& p_val_adj<0.05 & waldStat >10)),
+                     strns_ub_pairwise_mkrs_pt_ml_gsea_full[1:8],
+                     field_lab_exprsn) %>%
+  pmap(., ~go_e_fun(dset_lst = ..1,dset_lst_full = ..2, t2gn_lst= go_tbl_components, lst_names = c('field_overGO', 'lab_overGO', 'fieldVSlab_gsea'), unvrs = ..3))
+
+
+```
+
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+unlist(go_components)  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('##### ',.y,'   \n')
+        tryCatch(print(enrichplot::dotplot(.x)), error = function(e){function() 'No overepresented GO terms'})
+        cat('\n \n \n ')
+        cat("\n\n\n")
+      })
+
+```
+
+
+### GO enrichment with GO annotation file (gaf) from plasmoDB. 
+Groups the computation of GO enrichment for 'function', 'component' and 'processes' together generating only one result dataframe for all the terms.
+
+#### P.falciparum annotations
+Read and preprocess .gaf file
+```{r, message=FALSE, eval=FALSE}
+
+##!!!NOTE - Download .gaf file from plasmoDB (https://plasmodb.org/common/downloads/Current_Release/Pfalciparum3D7/gaf/ ) rename to end with .gz and then use gunzip to decompress it
+
+## Instrucions on using clusterprofiler with gaf file provided on plasmoDB https://support.bioconductor.org/p/p134523/#p134554 
+## parse_gff function https://github.com/YuLab-SMU/clusterProfiler/issues/421#issuecomment-1019300572
+
+# Pf3D7_63_gaf <- clusterProfiler::parse_gff("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/PlasmoDB-63_Pfalciparum3D7_GO.gaf")
+# Pf3D7_63_gaf[1] = Pf3D7_63_gaf[1] %>% map(. %>% mutate(across(Gene, ~str_replace(., '_', '-'))))
+# 
+# saveRDS(Pf3D7_63_gaf, "/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_63_gaf.rds")
+
+Pf3D7_66_gaf <- clusterProfiler::parse_gff("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/PlasmoDB-66_Pfalciparum3D7_GO.gaf")
+Pf3D7_66_gaf[1] = Pf3D7_66_gaf[1] %>% map(. %>% mutate(across(Gene, ~str_replace(., '_', '-'))))
+
+saveRDS(Pf3D7_66_gaf, "/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_66_gaf.rds")
+```
+
+```{r, message=FALSE}
+## Instrucions on using clusterprofiler with gaf file provided on plasmoDB https://support.bioconductor.org/p/p134523/#p134554 
+## parse_gff function https://github.com/YuLab-SMU/clusterProfiler/issues/421#issuecomment-1019300572
+
+Pf3D7_63_gaf <- readRDS("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_66_gaf.rds")
+```
+
+```{r, message=FALSE, eval=FALSE}
+## Instrucions on using clusterprofiler with gaf file provided on plasmoDB https://support.bioconductor.org/p/p134523/#p134554 
+## parse_gff function https://github.com/YuLab-SMU/clusterProfiler/issues/421#issuecomment-1019300572
+## GAF column names can be found here
+## GAF file split into the different aspects using awk before parsing since parse_gff doesn't separate aspects - awk -F"\t" 'NR == 1 || $9 == "F" { print $0 }' PlasmoDB-63_Pfalciparum3D7_GO.gaf > PlasmoDB-63_Pfalciparum3D7_GO_F.gaf
+
+## !! NB - Not much information on converting .gaf file to format needed for GSEA analysis: best function seems to be clusterProfiler::parse_gff https://github.com/YuLab-SMU/clusterProfiler/issues/421 - It adds more GOIDs which may be child GOs
+
+Pf3D7_66_gaf_F <-  clusterProfiler::parse_gff("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/PlasmoDB-66_Pfalciparum3D7_GO_F.gaf")
+Pf3D7_66_gaf_F[1] = Pf3D7_66_gaf_F[1] %>% map(. %>% mutate(across(Gene, ~str_replace(., '_', '-'))))
+
+saveRDS(Pf3D7_66_gaf_F, "/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_66_gaf_F.rds")
+
+Pf3D7_66_gaf_P <-  clusterProfiler::parse_gff("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/PlasmoDB-66_Pfalciparum3D7_GO_P.gaf")
+Pf3D7_66_gaf_P[1] = Pf3D7_66_gaf_P[1] %>% map(. %>% mutate(across(Gene, ~str_replace(., '_', '-'))))
+
+saveRDS(Pf3D7_66_gaf_P, "/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_66_gaf_P.rds")
+
+Pf3D7_66_gaf_C <-  clusterProfiler::parse_gff("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/PlasmoDB-66_Pfalciparum3D7_GO_C.gaf")
+Pf3D7_66_gaf_C[1] = Pf3D7_66_gaf_C[1] %>% map(. %>% mutate(across(Gene, ~str_replace(., '_', '-'))))
+
+saveRDS(Pf3D7_66_gaf_C, "/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_66_gaf_C.rds")
+```
+
+```{r, message=FALSE}
+## Instrucions on using clusterprofiler with gaf file provided on plasmoDB https://support.bioconductor.org/p/p134523/#p134554 
+## parse_gff function https://github.com/YuLab-SMU/clusterProfiler/issues/421#issuecomment-1019300572
+
+Pf3D7_66_gaf_F <- readRDS("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_66_gaf_F.rds")
+Pf3D7_66_gaf_P <- readRDS("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_66_gaf_P.rds")
+Pf3D7_66_gaf_C <- readRDS("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/Pf3D7_66_gaf_C.rds")
+
+Pf3D7_63_gaf_txt <- read_delim("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/PlasmoDB-66_Pfalciparum3D7_GO.gaf", skip = 1, delim = '\t', col_types = paste(rep('c', 17), collapse = ''), col_names = paste0('X', (1:17)))
+
+Pf3D7_63_gaf_terms_cat <- Pf3D7_63_gaf_txt %>% filter(!is.na(X9)) %>% distinct(pick(X5, X9)) %>% rename('go_id' = X5, 'fpc_class' = X9) 
+```
+
+
+##### Field VS Lab GO overrepresentation test & GSEA {.tabset}
+Consider this for GSEA https://github.com/satijalab/seurat/issues/532 
+```{r, message=FALSE}
+go_std_pdb = list(mast_tde_corr_tbls[1:8]  %>% map(.  %>% filter(!is.na(avg_log2FC) & p_val_adj<0.05 & waldStat >10)),
+                  strns_ub_pairwise_mkrs_pt_ml_gsea_full[1:8],
+                     field_lab_exprsn) %>%
+  pmap(., ~go_e_fun(dset_lst = ..1,dset_lst_full = ..2, t2gn_lst= Pf3D7_63_gaf, lst_names = c('field_overGO', 'lab_overGO', 'fieldVSlab_gsea'), unvrs = ..3))
+# go_processes = go_e_fun(go_term = 'Process', sufx = 'es')
+```
+
+
+```{r, results='asis', fig.width=9, fig.height=6.5}
+# cat('## Visualize field parasites {.tabset}   \n')
+unlist(go_std_pdb)  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('###### ',.y,'   \n')
+        tryCatch(
+          print(enrichplot::dotplot(.x, font.size=20) + 
+                  theme_classic() +
+                  # https://stackoverflow.com/questions/9690648/avoid-clipping-of-points-along-axis-in-ggplot
+                  coord_cartesian(clip = 'off') +
+                  labs(title = .y)+
+                  theme(legend.title=element_text(size=20,face="bold"), 
+                        legend.text=element_text(size=20),
+                        axis.text.x = element_text(size=20, angle = 90, vjust = 0.5, hjust=1),
+                        axis.text.y = element_text(size=20, face = "bold"),
+                        axis.title = element_text(size=20, face="bold"),
+                        legend.key = element_rect(colour = "transparent", fill = "transparent")
+                        )), 
+          error = function(e){function() 'No overepresented GO terms'})
+        cat('\n \n \n ')
+        cat("\n\n\n")
+      })
+
+```
+
+```{r, fig.width=6, fig.height=3}
+# str_wrap(df$category, width = 30)
+
+fvl_gsea_plts <- unlist(go_std_pdb)[grepl('gsea', names(unlist(go_std_pdb)))]  %>% 
+      purrr::imap(.,~{
+        # create tabset for each group 
+        cat('###### ',.y,'   \n')
+        plt <- tryCatch(
+          .x@result  %>% filter(p.adjust < 0.05) %>% arrange(p.adjust) %>% group_by(NES<0) %>% 
+            slice_head(., n = 5) %>%
+              mutate(go_labs = str_wrap(Description, width = 30)) %>%
+            ggplot(aes(reorder(go_labs, NES), NES)) +
+            geom_col(aes(fill = setSize/100), width = 0.8, position = position_dodge(width = 0.2), ) +
+            coord_flip() +
+            labs(x="GO terms", y="NES",title = .y) +
+              theme_classic()+ 
+                  theme(legend.title=element_text(size=12,face="bold"), 
+                        legend.text=element_text(size=11),
+                        axis.text.x = element_text(size=14, angle = 90, vjust = 0.5, hjust=1),
+                        axis.text.y = element_text(size=14, face = "bold", lineheight = 0.8),
+                        axis.title = element_text(size=15, face="bold"),
+                        legend.key = element_rect(colour = "transparent", fill = "transparent")
+                        ), 
+          error = function(e){function() 'No overepresented GO terms'})
+        return(plt)
+        cat('\n \n \n ')
+        cat("\n\n\n")
+      })
+
+fvl_gsea_plts
+```
+
+```{r}
+createWorksheet <- function(x, y){
+  wb <- createWorkbook()
+  for(i in seq_along(x)){
+    addWorksheet(wb, names(x)[i])
+    writeData(wb, sheet = names(x)[i], x[[i]])
+    saveWorkbook(wb, file = y, overwrite = TRUE)
+  }
+}
+```
+
+Put together GO tables together for manuscript
+```{r}
+##!!!! NOTE - MANUSCRIPT field vs lab DE and GSEA table
+
+## Extract the asx, fh, fl and m GSEA relevant files to export
+fvl_gsea_std_pdb <- unlist(go_std_pdb)[grepl('gsea', names(unlist(go_std_pdb)))][c(1,3:5)]
+
+##Prepare names for worksheet
+names(fvl_gsea_std_pdb) <- str_replace_all(str_remove_all(names(fvl_gsea_std_pdb), 'FieldVlab_|.fieldVSlab'), c('asx_'='Asexual ', 'fh_'='Female ', 'fl_'='Female (LE) ', 'mh_'='Male ')) 
+
+##Read the DE results
+fvl_n_powered_mast_tde_de_export <- readRDS("../Mali/v3_science_manuscript/tables/fvl_n_powered_mast_tde_de_export.RDS")
+
+##Write both the DE and GO results
+createWorksheet(c(fvl_n_powered_mast_tde_de_export[str_detect(names(fvl_n_powered_mast_tde_de_export), "_FvL")],fvl_gsea_std_pdb), "../Mali/v3_science_manuscript/tables/data S12 - Field versus lab MAST & tradeseq DE & GSEA.xlsx") 
+
+```
+
+Read the objects for manuscript image
+```{r, fig.width= 12, fig.height=17}
+##read in RDS object with heatmaps and density plot generated in the msc_field_lab_strains_DE.Rmd to combine with the gsea barplot generated here
+all_labvfld_hms_fvl <- readRDS('plots/DE_heatmaps/all_labvfld_hms_fvl.RDS')
+fvl_denst_plt <- readRDS('plots/DE_heatmaps/fvl_denst_plt.RDS')
+```
+
+Read the objects for manuscript image
+```{r, fig.width= 8.5, fig.height=13}
+# fvl_de <- pmap(list(all_labvfld_hms_fvl[c(1,3:5)], fvl_denst_plt[c(1,3:5)], fvl_gsea_plts[c(1,3:5)]), ~{
+#   HM_gb = grid.grabExpr(draw(..1))
+#   
+#   cowplot::plot_grid( HM_gb,
+#                       plot_grid(..2+
+#                                   theme(axis.text=element_text(size=14),
+#                                         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+#                                         # axis.title.y = element_blank(),
+#                                         axis.title.y=element_text(size=14,face="bold"),
+#                                         axis.title.x=element_text(size=14,face="bold"), 
+#                                         legend.text = element_text(size = 13.5) ,
+#                                         legend.title = element_text(size = 14, face = "bold"),
+#                                         legend.position="bottom",
+#                                         plot.background = element_rect(color = "lightgrey"),
+#                                         plot.margin=margin(t=2,r=0.1,b=2.8,l=0.1,unit="cm"),
+#                                         legend.box.margin = margin(t = 0, r = 0.8, b = 0, l = 0, unit = "cm")
+#                                   )+ 
+#                       guides(color = guide_legend(override.aes = list(size = 4), ncol = 2, title.position = "top")), 
+#                                 ..3+
+#                          # scale_x_discrete(labels = function(l) str_wrap(l, width = 15)) +
+#                           scale_fill_continuous(name = 'Size') +
+#                                   theme(axis.text.x = element_text(size=12, angle = 90, vjust = 0.5, hjust=1),
+#                                         axis.text.y = element_text(size=15.5, face='plain', lineheight = 0.8),
+#                                         axis.title=element_text(size=13,face="bold"), 
+#                                         # axis.title.y=element_blank(), 
+#                                         legend.text = element_text(size = 13) ,
+#                                         legend.title = element_text(size = 13, face = "bold"),
+#                                         legend.position="bottom",
+#                                         legend.key.height = unit(0.2, "cm"),
+#                                         legend.margin = margin(0),
+#                                         plot.background = element_rect(color = "lightgrey"),
+#                                         plot.title = element_blank(),
+#                                         plot.margin=margin(t=0.1,r=0.1,b=0.8,l=0.1,unit="cm"),
+#                                         legend.box.margin = margin(t = 0, r = 3.0, b = 0, l = 0, unit = "cm")
+#                                   ) +
+#                         guides(fill = guide_legend()),
+#                                 ncol=2, 
+#                                 rel_widths = c(.3,.7)
+#                       )  + 
+#                         panel_border(),
+#                       ncol=1, 
+#                       rel_heights = c(.42,.58)
+#   )+ panel_border()
+# }
+# 
+# )
+```
+
+
+```{r, fig.width= 12, fig.height=16}
+# plot_grid(plotlist = fvl_de, nrow = 2, ncol = 2, labels = c('A','B','C','D'), label_size = 24, vjust = 1.1)
+```           
+
+
+
+##### Female low vs female high GO overrepresentation test & GSEA {.tabset}
+
+```{r}
+##Get the universe - all genes with average expression greater than 0 across all 'Female' & 'Female (LE)' cells
+fh_FLE_expresn <- msc_qcd_anotd_stgstrqc[2:4] %>% 
+  map(., . %>% subset(., subset =stageHL %in% c('Female', 'Female (LE)')) %>% 
+  AverageExpression(., assays = 'RNA', group.by = 'stageHL') %>% 
+  data.frame() %>% 
+  filter(if_any(everything(), ~. >0)) %>% 
+  rownames())
+
+
+
+```
+
+```{r, message=FALSE}
+fh_fl_go_std_pdb <- list(fh_fl_marker_list_acc_strn_3.13.14 %>% map(.  %>% filter(!is.na(avg_log2FC) & p_val_adj<0.05)),
+                         fh_fl_marker_list_acc_strn_3.13.14,
+                     fh_FLE_expresn) %>%
+  pmap(., ~go_e_fun(dset_lst = ..1,dset_lst_full = ..2, t2gn_lst= Pf3D7_66_gaf_F, lst_names = c('fh_overGO', 'fl_overGO', 'fhVSfl_gsea'), unvrs = ..3))
+
+
+```
+
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+unlist(fh_fl_go_std_pdb)  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('###### ',.y,'   \n')
+        tryCatch(print(enrichplot::dotplot(.x, font.size=18)), error = function(e){function() 'No overepresented/gsea GO terms'})
+        tryCatch(print(cnetplot(.x, showCategory=10)), error = function(e){function() 'No overepresented/gsea GO terms'})
+        cat('\n \n \n ')
+        cat("\n\n\n")
+      })
+
+```
+
+##### Female low vs female high pairwise {.tabset}
+
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+unlist(fh_fl_go_std_pdb)  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('###### ',.y,'   \n')
+        fh_fl_pwt = tryCatch(pairwise_termsim(.x), error = function(e){function() 'No overepresented/gsea GO terms'})
+        tryCatch(print(emapplot( fh_fl_pwt, node_scale=1.5,layout="kk")), error = function(e){function() 'No overepresented/gsea GO terms'})
+        # print(upsetplot(fh_fl_pwt))
+        # p1 <- treeplot(fh_fl_pwt)
+        # p2 <- treeplot(fh_fl_pwt, hclust_method = "average")
+        # print(aplot::plot_list(p1, p2, tag_levels='A'))
+        cat('\n \n \n ')
+        cat("\n\n\n")
+      })
+
+```
+
+##### Female LE, HE, Male LE, HE absence/present genes (detected in 25% of the population) overrepresentation test {.tabset}
+
+```{r}
+## Copy the gene lists to make do GO overrepresentation test
+# mfet_gns_3.13.14_don_colps<- readRDS("data/processed/msc14/5736STDY11771546_DB52e_star/mf_le_he/mfet_gns_3.13.14_don_colps.RDS")
+
+```
+
+
+
+```{r}
+##Get the universe - all genes with average expression greater than 0 across all msc14 cells
+m_f_expresn <- msc_qcd_anotd_stgstrqc[2:4] %>% 
+  map(., . %>% AverageExpression(., assays = 'RNA', group.by = 'stageHL') %>% 
+  data.frame() %>% 
+  filter(if_any(everything(), ~. >0)) %>% 
+  rownames())
+
+m_f_expresn <- list(unique(unlist(m_f_expresn)))
+
+
+
+```
+
+```{r, message=FALSE}
+##Different classes of genes
+f_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(is.na(MLE_genes) & is.na(M_genes) & FLE_genes == 'y' & F_genes == 'y' & is.na(LR_genes) & is.na(ET_genes)) %>% pull(gene_id)),
+                          m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+m_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(is.na(FLE_genes) & is.na(F_genes) & MLE_genes == 'y' & M_genes == 'y' & is.na(LR_genes) & is.na(ET_genes)) %>% pull(gene_id)),
+                          m_f_expresn[1])%>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+
+##Present in fh or mh and absent in all the others
+##fh
+fh_only_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(is.na(MLE_genes) & is.na(M_genes) & is.na(FLE_genes) & F_genes == 'y' & is.na(LR_genes) & is.na(ET_genes)) %>% pull(gene_id)),
+                          m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+##mh
+mh_only_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(is.na(FLE_genes) & is.na(F_genes) & is.na(MLE_genes)  & M_genes == 'y' & is.na(LR_genes) & is.na(ET_genes)) %>% pull(gene_id)),
+                          m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+##Present in fl, ml and either present or absent the others - This is because these cells express very few genes
+##fl
+fl_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(FLE_genes == 'y') %>% pull(gene_id)),
+                          m_f_expresn[1])  %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+##ml
+ml_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(MLE_genes == 'y') %>% pull(gene_id)),
+                          m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+##Present in fl, ml and absent in asexuals but either present or absent in the others - This is because these cells express very few genes
+##fl
+fl_noasex_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter( FLE_genes == 'y' & is.na(LR_genes) & is.na(ET_genes)) %>% pull(gene_id)),
+                          m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+##ml
+ml_noasex_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter( MLE_genes == 'y'& is.na(LR_genes) & is.na(ET_genes)) %>% pull(gene_id)),
+                          m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+
+##Present in all stages
+##fl
+all_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(if_all(contains('_genes'), ~!is.na(.) )) %>% pull(gene_id)),
+                          m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+##Present in all gam stages and absent in asexual stages
+gam_noasex_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(if_all(matches('[F|M|FLE|MLE]_genes'), ~!is.na(.) )) %>% filter(if_all(matches('.[R|T]_genes'), ~is.na(.) ))  %>% pull(gene_id)),
+                          m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+##Present in all asexual stages and absent in gam stages
+
+asex_nogam_abspres_go_std_pdb <- list(list(mfet_gns_3.13.14_don_colps %>% filter(if_all(matches('.[R|T]_genes'), ~!is.na(.) )) %>% filter(if_all(matches('[F|M|FLE|MLE]_genes'), ~is.na(.) ))  %>% pull(gene_id)),
+                                      m_f_expresn[1]) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+```
+
+
+```{r, results='asis', fig.height=4, fig.width=12}
+go_bar_fn <-function(go_res  ) {
+  
+  tbl <- go_res %>% separate_wider_delim(., GeneRatio, '/', names = c('nume', 'denom')) %>% mutate('Gene ratio' =as.numeric(nume)/as.numeric(denom) )%>% mutate(Description = str_wrap(Description, width = 30))  %>% arrange(`Gene ratio`)
+  
+  tbl %>%
+    mutate(across(Description, ~factor(., levels = tbl$Description))) %>% 
+    ggplot(aes(x = `Gene ratio`, y=Description, size=Count, color = p.adjust)) + 
+    geom_point() + 
+    theme_bw()+
+    facet_wrap( .~Ontology, scales =  "free_y") +
+  theme(legend.box = "horizontal") #+
+    # guide(color = guide_legend(override.aes = list(size = 3.5), nrow = 2,title.position = "top"))
+  
+}
+```
+
+
+```{r, results='asis', fig.height=8, fig.width=18}
+# plt1<- list(all_abspres_go_std_pdb[[1]] %>% split(factor(.$Ontology)),
+#             names(all_abspres_go_std_pdb[[1]] %>% split(factor(.$Ontology))),
+#             c(40, 22, 10),
+#             c(6, 5, 2)) %>%
+#   pmap(., ~go_bar_fn(..1, ..2, ..3, ..4)) %>% 
+#   plot_grid(plotlist = ., nrow = 1, rel_widths = c(.50,.40,.10))
+# plt1
+```
+
+
+```{r, results='asis', fig.height=4, fig.width=12}
+go_bar_fn <-function(go_res , ttl, strw_int = 20, b_length = 4, x_digits = 1) {
+  
+  # tbl <- go_res %>% separate_wider_delim(., GeneRatio, '/', names = c('nume', 'denom')) %>% mutate('Gene ratio' =as.numeric(nume)/as.numeric(denom) )%>% mutate(Description = str_wrap(Description, width = 30))  %>% arrange(`Gene ratio`)
+  tbl <- go_res %>% separate_wider_delim(., GeneRatio, '/', names = c('nume', 'denom')) %>% mutate('Gene ratio' =as.numeric(nume)/as.numeric(denom) ) %>% arrange(`Gene ratio`)
+  
+  tbl %>% 
+    # group_by(Ontology) %>%
+    # add_count(Ontology, name = 'ont_size') %>%
+    # mutate(strw_int = case_when(ont_size<3~60,ont_size>3~30)) %>%
+    mutate(across(Description, ~str_replace_all(. , c('-'=' ','oxidoreductase'='oxido reductase')) ))%>%
+    mutate(go_labs = str_wrap(Description, width = strw_int)) %>%
+    mutate(p=-log10(p.adjust))%>%
+    ggplot(aes(y = reorder(go_labs, `Gene ratio`), x=`Gene ratio`, size=Count, color = p.adjust)) +
+    geom_point() + 
+    scale_x_continuous(labels = function(x) format(x, digits = x_digits), breaks=scales::breaks_pretty(n=3)) +
+    scale_color_continuous(labels = function(x) format(x, digits = 2), breaks=scales::breaks_pretty(n=3)) +
+    scale_size_continuous(labels = function(x) format(x, digits = 1), breaks=scales::breaks_pretty(n=2)) +
+    theme_bw()+
+    coord_cartesian(clip = 'off') +
+    # facet_wrap( .~Ontology, scales =  "free", space = "free_x") + 
+     # ggforce::facet_row(vars(Ontology), scales = 'free', space = 'free') +
+    labs(y='Description', title = str_replace(ttl, ' ', '\n'))+
+  theme(axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size = 15),
+        axis.title.x = element_text(size = 16),
+        plot.title = element_text(size = 16, face = 'bold'),
+        legend.position = "bottom",
+        legend.box = 'horizontal',
+        legend.spacing.x = unit(0.01, "cm"),
+        legend.box.margin = margin(t = 0, r = 3.1, b = 0, l = 0, unit = "cm"),
+        legend.title = element_text(size = 12, face = 'bold'),
+        legend.text = element_text(size = 11),
+        axis.title.y = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_line(color = 'black')#,
+        # panel.spacing = unit(0, "lines"),  # Remove panel spacing
+        # plot.margin = margin(0, 0, 0, 0, "lines"),  # Remove plot margin
+        # aspect.ratio = c(.4,.4,.2)
+        )+  # Adjust facet widths) +
+    guides(color = guide_colorbar(title.position = "left", order = 2, barwidth=b_length, barheight = 0.3,title = 'P: '),
+           size = guide_legend(title.position = "left", order = 1,title = 'Count:'))
+  
+}
+```
+
+
+```{r}
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+stg_strn_distb_bar = readRDS("plots/figS26/stg_strn_distb_bar.RDS")
+```
+
+
+Combine mfet_gns_3.13.14_don_colps with expression information for genes
+
+```{r}
+## Remove MSC3 Male information from the avg expression and cell proportion table since we are only interested in clusters where we have both LE and canonical
+stg_expr_cellProp_lst["MSC3"] <- map(stg_expr_cellProp_lst["MSC3"], ~.x %>% select(-c(contains("M_"))))
+
+##write genes to manuscript
+stg_gns_ms <- map2(stg_expr_cellProp_lst[2:4], mfet_gns_3.13.14_lst[names(stg_expr_cellProp_lst[2:4])], ~{.y %>% full_join(., .x, by = 'gene_id')%>%
+  left_join(., Pf3D7_genes_plasmoDB[,c("gene_id", "Gene", "Product Description")], by = 'gene_id') %>% dplyr::select(gene_id, ends_with('_genes'), ends_with('_exp'), ends_with('_celProp'),  Gene, `Product Description`)})# %>% 
+
+names(stg_gns_ms) <- paste0(2:4, ".", names(stg_gns_ms), " Core genes")
+```
+
+```{r}
+##write collapsed core genes that feed into the GO 
+comb_gns <- list(mfet_gns_3.13.14_don_colps %>% dplyr::select(gene_id, ends_with('_genes'))) %>% set_names("5.Combined core genes for GO")
+
+```
+
+```{r}
+##write genes to manuscript
+# stg_gns_ms <- mfet_gns_3.13.14_don_colps %>% dplyr::select(gene_id, F_genes, FLE_genes, M_genes, MLE_genes, LR_genes, ET_genes, Gene, `Product Description`) %>% list() %>% set_names(c('2.Stage genes'))
+```
+
+Write the GO terms from above into file
+```{r}
+##!!!! NOTE - GO stage genes and GO table
+##Combine stage genes table and GO results
+
+stg_gns_go <- map(list( fh_only_abspres_go_std_pdb[[1]],f_abspres_go_std_pdb[[1]], mh_only_abspres_go_std_pdb[[1]], m_abspres_go_std_pdb[[1]], asex_nogam_abspres_go_std_pdb[[1]]),
+                  ~.x %>% 
+                    group_by(Ontology) %>%  
+                    arrange(`p.adjust`, .by_group = T)  %>% 
+                    ungroup()  %>%
+                    rename(c('Gene\nRatio'= GeneRatio))) %>% 
+  set_names(c('6.Female core GO', '7.Female (canonical+LE) core GO', '8.Male core GO', '9.Male core (canonical+LE) GO', '10.Asexual core GO'))
+
+##Export the list of field strain_strain DE dfs with appropriate names to workbook with each stage as a sheet
+# createWorksheet(c(stg_gns_ms, stg_gns_go, ussr_avg_exprsn_dta), "../Mali/v3_science_manuscript/tables/data S11 - Donor parasite stage genes, GO, FHE vs FLE unspliced_spliced ratios and average expression.xlsx")
+createWorksheet(c(stg_gns_ms, comb_gns, stg_gns_go), "../Mali/v3_science_manuscript/tables/data S11 - Donor parasite stage core genes, average expression and GO of core gene sets.xlsx")
+
+```
+
+```{r}
+##Print the GO tables using and arrange in the order fh ony, fl+fh only, mh ony, asex only and ml+mh only
+go_gt_lst <- map(list( fh_only_abspres_go_std_pdb[[1]],f_abspres_go_std_pdb[[1]], mh_only_abspres_go_std_pdb[[1]], asex_nogam_abspres_go_std_pdb[[1]],m_abspres_go_std_pdb[[1]]),
+                 ~.x %>% 
+                   group_by(Ontology) %>% 
+                   arrange(`p.adjust`) %>% 
+                   slice_head(., n=2) %>% 
+                   ungroup()  %>% 
+                   dplyr::select(c('Ontology', 'Description', 'GeneRatio')) %>% rename(c('Gene\nRatio'= GeneRatio)) %>%  
+                   mutate(Description = str_wrap(Description, width = 20)) %>%  
+                   gt() %>% 
+                   data_color(method = 'factor', columns = 'Ontology', target_columns = c('Description', 'Gene\nRatio'), palette = 'Pastel2') %>% cols_hide('Ontology') %>% 
+                   tab_options(table.width = pct(20), column_labels.font.weight = 'bold'))
+
+```
+
+
+```{r}
+f_go_tbl<- f_abspres_go_std_pdb[[1]]  %>% dplyr::select(c('Ontology', 'Description', 'GeneRatio', 'p.adjust')) %>% mutate(across(p.adjust, ~round(., digits = 2))) %>% gt() %>% data_color(method = 'factor', columns = 'Ontology', target_columns = c('Description', 'GeneRatio', 'p.adjust')) %>% cols_hide('Ontology')
+
+m_go_tbl<- m_abspres_go_std_pdb[[1]]  %>% dplyr::select(c('Ontology', 'Description', 'GeneRatio', 'p.adjust')) %>% mutate(across(p.adjust, ~round(., digits = 2))) %>% gt() %>% data_color(method = 'factor', columns = 'Ontology', target_columns = c('Description', 'GeneRatio', 'p.adjust')) %>% cols_hide('Ontology')
+
+```
+
+```{r, results='asis', fig.height=4, fig.width=12}
+# plt1<- list(f_abspres_go_std_pdb[[1]] %>% split(factor(.$Ontology)),
+#             names(f_abspres_go_std_pdb[[1]] %>% split(factor(.$Ontology))),
+#             c(40, 22, 10),
+#             c(6, 5, 2)) %>%
+#   pmap(., ~go_bar_fn(..1, ..2, ..3, ..4)) %>% 
+#   plot_grid(plotlist = ., nrow = 1, rel_widths = c(.50,.31,.19))
+
+plt1<- list(f_abspres_go_std_pdb[[1]] %>% split(factor(.$Ontology)),
+            names(f_abspres_go_std_pdb[[1]] %>% split(factor(.$Ontology))),
+            c(40, 22),
+            c(6, 5)) %>%
+  pmap(., ~go_bar_fn(..1, ..2, ..3, ..4)) %>% 
+  plot_grid(plotlist = ., nrow = 1, rel_widths = c(.50,.31,.19))
+plt1
+```
+
+
+```{r, results='asis', fig.height=4, fig.width=10}
+plt2<- list(m_abspres_go_std_pdb[[1]] %>% split(factor(.$Ontology)),
+            names(m_abspres_go_std_pdb[[1]] %>% split(factor(.$Ontology))),
+            c(10, 30),
+            c(2, 6),
+            c(2, 2)
+            # c(10, 30, 13),
+            # c(2, 6, 3),
+            # c(2, 2, 2)
+            ) %>% 
+  pmap(., ~go_bar_fn(go_res=..1 , ttl=..2, strw_int = ..3, b_length = ..4, x_digits = ..5)) %>% 
+  plot_grid(plotlist = ., nrow = 1, rel_widths = c(.25,.47,.28))
+plt2
+```
+
+```{r}
+##Save the above image for plot grid in functional_GO_n_lit_comparison.RMD for manuscript
+stg_strn_distb_bar = readRDS("plots/figS26/stg_strn_distb_bar.RDS")
+```
+
+```{r, results='asis', fig.height=10, fig.width=10}
+fld_gn_expression_specificity_upset_vn_don3 = readRDS("plots/figS26/fld_gn_expression_specificity_upset_vn_don3.RDS")
+```
+
+
+```{r, results='asis', fig.height=10, fig.width=10}
+fh_fl_vlcano = readRDS("plots/figS26/fh_fl_vlcano.RDS")
+```
+
+```{r, results='asis', fig.height=10, fig.width=10}
+fh_fl_gsea_bplot = readRDS("plots/figS26/fh_fl_gsea_bplot.RDS")
+```
+
+```{r, results='asis', fig.height=10, fig.width=10}
+fhe_fle_ussr = readRDS("plots/figS26/fhe_fle_ussr.RDS")
+```
+
+```{r, results='asis', fig.height=10, fig.width=10}
+fhe_fle_ussr_wilcx = readRDS("plots/figS26/fhe_fle_ussr_wilcx.RDS")
+```
+
+
+
+```{r, results='asis', fig.height=4, fig.width=12}
+vlcno_gsea_lasonder <- plot_grid(fh_fl_vlcano+
+  theme(
+    axis.text.y  = element_text(size = 15),
+    axis.text.x = element_text(size = 15),#, angle = 45
+    axis.title.y  = element_text(size = 16, face = "bold"),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    # axis.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 11),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.position="none",
+    text = element_text(size = 5),
+    plot.caption = element_blank(),
+    legend.margin = margin(t=-15),
+    # plot.margin = unit(c(1,2,1,1),"cm")
+    # legend.margin=margin()
+  ), 
+                         fh_fl_gsea_bplot +
+  theme(
+    axis.text.y  = element_text(size = 15),
+    axis.text.x = element_text(size = 15),#, angle = 45
+    axis.title.y  = element_text(size = 16, face = "bold"),
+    axis.title.x = element_text(size = 16, face = "plain"),
+    # axis.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 11),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.position="bottom",
+    legend.margin = margin(t=-0.1),
+    plot.margin = margin(t=1.5, l=0.5, r=0.5, unit = "cm")
+    # legend.margin=margin()
+  ),
+                         lasonder_avg_umap[[1]]+
+  theme(legend.text = element_text(size = 11),
+        plot.margin = margin(t=1, unit = "cm")),
+                         ncol = 3,
+                         rel_widths = c(.33,.41,.26),
+              labels = c('D', 'E', 'F'),
+              label_size = 20)
+
+vlcno_gsea_lasonder
+```
+
+
+
+```{r, results='asis', fig.height=16.5, fig.width=12}
+##modify patchwork upset plot appropriately
+
+plt= plot_grid(stg_strn_distb_bar[[1]]+
+                 theme(axis.title.y = element_text(size = 16, face = 'plain'),
+                       axis.text.y = element_text(size = 15),
+                       legend.title = element_text(size = 16),
+                       legend.text = element_text(size = 15),
+                       strip.text =element_text(size=17,face="bold", colour = 'black'),
+                       legend.margin = margin(t=-5)),
+               ggdraw(fld_gn_expression_specificity_upset_vn_don3)+
+                theme(plot.margin = margin(t=0.5, unit = "cm")),
+               plt1, 
+               plt2,
+               vlcno_gsea_lasonder,
+               nrow = 5, 
+               rel_heights = c(.17,.26,.195,.175,.20),
+              labels = c('A', 'B', 'C', 'D', ''),
+              label_size = 20
+               )
+plt
+```
+
+
+
+```{r, results='asis', fig.height=16.5, fig.width=12}
+##get gt tables as grob for merging using cowplot from gt github https://github.com/rstudio/gt/issues/961
+
+gt_grob <- function(gt_object, wth = NULL, hgt = NULL, ...){
+  
+  out_name <- file.path(
+    tempfile(pattern = "file", tmpdir = tempdir(), fileext = ".png")
+  )
+  gtsave(gt_object, out_name, ...)
+  gtsave(gt_object, filename = "obj2.png", path = "plots/")
+  in_png <- png::readPNG(out_name)
+  on.exit(file.remove(out_name), add=TRUE)
+  grid::rasterGrob(in_png, width = wth, height = hgt)
+  
+}
+
+# f_gt_plt <- gt_grob(f_go_tbl)
+# m_gt_plt <- gt_grob(m_go_tbl)
+## !!! in case of error "s$close()" check https://stackoverflow.com/questions/73964325/error-in-sclose-attempt-to-apply-non-function-when-calling-gtsave 
+all_stg_gtpt <- map(go_gt_lst, ~gt_grob(.x))
+all_stg_gtpt
+```
+
+
+```{r, results='asis', fig.height=16, fig.width=12}
+##get gt tables as grob for merging using cowplot from gt github https://github.com/rstudio/gt/issues/961
+
+##Get legend for the GO ontologies
+onts = c('Biological process', 'Cellular component', 'Molecular function')
+ont_lg <- cowplot::get_legend(data.frame(ont = onts) %>% ggplot(aes( y=1, fill=ont)) + scale_fill_manual(values = brewer.pal(n = 3, name = 'Pastel2') %>% set_names(onts)) + geom_bar() + theme(legend.direction = 'horizontal', legend.title = element_text(size = 14, face = 'bold'), legend.text = element_text(size = 14))+ guides(fill = guide_legend(title = 'Ontology:', nrow = 1)))
+
+##PUT plots together for the manuscript
+plt= plot_grid(stg_strn_distb_bar[[1]]+
+                 theme(axis.title.y = element_text(size = 16, face = 'plain'),
+                       axis.text.y = element_text(size = 15),
+                       legend.title = element_text(size = 16),
+                       legend.text = element_text(size = 15),
+                       strip.text =element_text(size=17,face="bold", colour = 'black'),
+                       legend.margin = margin(t=-5)),
+               NULL,
+               ggdraw(fld_gn_expression_specificity_upset_vn_don3)+
+                theme(plot.margin = margin(t=0.5, unit = "cm")),
+               plot_grid(plotlist = all_stg_gtpt[1:8], ncol = 5),
+               ont_lg,
+               NULL,
+               # us_s_lasonder,
+               nrow = 7, 
+               rel_heights = c(.17,0.01,.32,.27,0.02,0.01,.20),
+              labels = c('A','', 'B', 'C', '', '', ''),
+              label_size = 20
+               )
+plt
+save_plot('plots/figS26/final_pt.svg',plt, base_width = 12, base_height = 16.5)
+```
+
+
+
+
+
+
+
+```{r, results='asis', fig.height=4, fig.width=12}
+## combine plots for LE exploration
+core_g_lg <- cowplot::get_legend(mml_core_gns_barp + 
+  theme(legend.position = 'bottom') +
+    guides(fill=guide_legend(title.position = "left", nrow = 1, title = "Stage")))
+
+
+fl_ml_mosq_pt <- plot_grid(
+  plot_grid(plotlist = map(list(ffl_core_gns_barp, mml_core_gns_barp), ~.x +
+                               theme(legend.position = 'none',
+                                     # plot.margin = margin(t=1, unit = "cm")
+                                     )),
+              rel_widths = c(.6,.4)),
+  core_g_lg,
+    nrow = 2,
+    rel_heights = c(.8,.2))
+
+fl_ml_mosq_pt
+```
+
+```{r, results='asis', fig.height=5.5, fig.width=12}
+## combine plots for LE exploration
+go_mosq_fl_pt <- plot_grid(
+  plot_grid(plotlist = all_stg_gtpt[1:5], ncol = 5, rel_widths = c(.24,.18,.19,.20,.19)),
+  ont_lg,
+  NULL,
+  fl_ml_mosq_pt,
+  nrow = 4,
+  rel_heights = c(.55,.02,.03,.40),
+  labels = c("D","","","E"),
+  label_size = 20
+               
+)
+go_mosq_fl_pt
+```
+
+genes in lasonder among gene sets for MANUSCRIPT
+```{r}
+a= mfet_gns_3.13.14_don_colps %>% filter(fh_fl_only == 'y') %>% pull(gene_id) 
+table(a %in% tr_gns)
+prop.table(table(a %in% tr_gns))
+
+a= mfet_gns_3.13.14_don_colps %>% filter(fh_only == 'y') %>% pull(gene_id) 
+table(a %in% tr_gns)
+prop.table(table(a %in% tr_gns))
+
+a= mfet_gns_3.13.14_don_colps %>% filter(mh_ml_only == 'y') %>% pull(gene_id) 
+table(a %in% tr_gns)
+prop.table(table(a %in% tr_gns))
+
+a= mfet_gns_3.13.14_don_colps %>% filter(mh_only == 'y') %>% pull(gene_id) 
+table(a %in% tr_gns)
+prop.table(table(a %in% tr_gns))
+
+```
+
+
+#### P.berghei annotations 
+```{r, message=FALSE}
+##ortholog file to translate to falciparum IDs
+ortho <- read_csv("/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Pf3D7_genomes_gtfs_indexs/ortho4.csv")
+
+```
+
+genes in kevin hart pycrr4
+```{r}
+hart_male_tr_gns <- read_xlsx('data/raw/published_lit/Hart_deadenylases_male_gam/DE_due_pyccr4_deltn.xlsx', sheet = 'P adjusted Significant') %>% rename('gene_id'=GeneID...1) %>% left_join(., ortho, by=c('gene_id'='yoelii') ) 
+
+hart_gns <- hart_male_tr_gns%>% filter(!is.na(falciparum)) %>% dplyr::pull(falciparum) %>% str_replace(., '_', '-')
+
+a= mfet_gns_3.13.14_don_colps %>% filter(fh_fl_only == 'y') %>% pull(gene_id) 
+table(a %in% hart_gns)
+prop.table(table(a %in% hart_gns))
+
+a= mfet_gns_3.13.14_don_colps %>% filter(fh_only == 'y') %>% pull(gene_id) 
+table(a %in% hart_gns)
+prop.table(table(a %in% hart_gns))
+
+a= mfet_gns_3.13.14_don_colps %>% filter(mh_ml_only == 'y') %>% pull(gene_id) 
+table(a %in% hart_gns)
+prop.table(table(a %in% hart_gns))
+
+a= mfet_gns_3.13.14_don_colps %>% filter(mh_only == 'y') %>% pull(gene_id) 
+table(a %in% hart_gns)
+prop.table(table(a %in% hart_gns))
+
+```
+
+```{r, results='asis', fig.height=4, fig.width=12}
+tbl <- c(f_abspres_go_std_pdb,m_abspres_go_std_pdb)  %>% set_names('Female', 'Male') %>%  bind_rows(., .id = 'Sex') %>% separate_wider_delim(., GeneRatio, '/', names = c('nume', 'denom')) %>% mutate('Gene ratio' =as.numeric(nume)/as.numeric(denom) ) %>% arrange(`Gene ratio`)
+  
+  tbl %>% mutate(across(Description, ~factor(., levels = tbl$Description))) %>% 
+    ggplot(aes(x = `Gene ratio`, y=Description, size=Count, color = p.adjust)) + 
+    geom_point() + 
+    theme_bw()+
+    facet_grid( Sex~Ontology, scales =  "free", space =  "free")
+  
+```
+
+
+## GO for the DE genes
+
+### NF54 VS 7G8
+
+```{r, fig.width = 32, fig.height = 7}
+
+# msc_gam_combi_noLE_de <- readRDS("data/processed/DB52e_star/msc_gam_combi_noLE_de.RDS")
+msc_gcombi_noLE_sub_sce <- readRDS("data/processed/DB52e_star/msc_gcombi_noLE_sub_sce.RDS")
+
+```  
+
+
+```{r}
+## get the universe for the GO overrepresentation test ie all the genes detected (average expression greater than 0) in the cell subset that go into the DE
+DE_unvrs_gns <- map(msc_gcombi_noLE_sub_sce[c("MSC14_f_don3","MSC3_m_don2","M_NF54_7G8_f", "M_NF54_7G8_m")], ~{
+  
+  CreateSeuratObject(counts = counts(.x), data = logcounts(.x)) %>% 
+  AverageExpression(., assays = 'RNA') %>% 
+  data.frame() %>% 
+  filter(all > 0) %>%
+  rownames()
+})
+
+
+```
+
+```{r}
+## Get the field and lab DE genes
+DEgns <- map(mast_tde_corr_tbls[c("lf_StrainsDE_MSC14_f_don3","lf_StrainsDE_MSC3_m_don2","lf_StrainsDE_M_NF54_7G8_f", "lf_StrainsDE_M_NF54_7G8_m")], ~{
+  .x %>% filter(p_val_adj < 0.05 & waldStat>10) %>% pull(gene_id)
+})
+
+```
+
+
+```{r, message=FALSE}
+## GO
+DE_go_std_pdb <- list(DEgns, DE_unvrs_gns) %>%
+    pmap(., ~{go_e_fun_overrep_only_fcp(gns = ..1, unvrs = ..2)})
+
+```
+
+
+Write the GO terms from above into file
+```{r}
+##!!!! NOTE - GO stage genes and GO table
+##Combine stage genes table and GO results
+
+stg_gns_go <- map(DE_go_std_pdb[1:2],
+                  ~.x %>% 
+                    group_by(Ontology) %>%  
+                    arrange(`p.adjust`, .by_group = T)  %>% 
+                    ungroup()  %>%
+                    rename(c('Gene\nRatio'= GeneRatio))) %>% 
+  set_names(c('4.MSC14_female DE GO', '5.MSC3_male DE GO'))
+
+```
+
+
+```{r}
+## Rename the lists for friendly tab names
+fvl_n_powered_mast_tde_de_export_fld <- fvl_n_powered_mast_tde_de_export[c("MSC14_f_don3", "MSC3_m_don2")]
+names(fvl_n_powered_mast_tde_de_export_fld) <- paste0(2:(length(fvl_n_powered_mast_tde_de_export_fld)+1), ".", str_replace_all(names(fvl_n_powered_mast_tde_de_export_fld), c("f_don3" = "female DE", "m_don2" = "male DE")))
+
+fvl_n_powered_mast_tde_de_export_lab <- fvl_n_powered_mast_tde_de_export[c("M_NF54_7G8_f", "M_NF54_7G8_m")]
+names(fvl_n_powered_mast_tde_de_export_lab) <- paste0(6:(length(fvl_n_powered_mast_tde_de_export_lab)+5), ".", str_remove(str_replace_all(names(fvl_n_powered_mast_tde_de_export_lab), c("_f" = "_female DE", "_m" = "_male DE")), "M_"))
+
+```
+
+
+```{r}
+##Export the list of field strain_strain DE dfs with appropriate names to workbook with each stage as a sheet
+createWorksheet(c(fvl_n_powered_mast_tde_de_export_fld, stg_gns_go, fvl_n_powered_mast_tde_de_export_lab), "../Mali/v3_science_manuscript/tables/data S12 - High power strains MAST & tradeseq DE & GO.xlsx")
+
+```
+
+```{r}
+##Print the DE GO tables using and arrange in the order msc14 female and then msc3 male
+DE_go_gt_lst <- map(DE_go_std_pdb[1:2],
+                 ~.x %>% 
+                   group_by(Ontology) %>% 
+                   arrange(`p.adjust`) %>% 
+                   slice_head(., n=4) %>% 
+                   ungroup()  %>% 
+                   dplyr::select(c('Ontology', 'Description', 'GeneRatio')) %>% rename(c('Gene\nRatio'= GeneRatio)) %>%  
+                   mutate(Description = str_wrap(Description, width = 40)) %>%  
+                   gt() %>% 
+                   data_color(method = 'factor', columns = 'Ontology', target_columns = c('Description', 'Gene\nRatio'), palette = 'Pastel2') %>% cols_hide('Ontology') %>% 
+                   tab_options(table.width = pct(40), column_labels.font.weight = 'bold')
+                 )
+
+```
+
+
+```{r}
+##Print the DE GO tables using and arrange in the order msc14 female and then msc3 male
+stg_gns_go
+DE_go_gt_lst 
+```
+
+
+```{r, results='asis', fig.height=16.5, fig.width=12}
+##get gt tables as grob for merging using cowplot from gt github https://github.com/rstudio/gt/issues/961
+DE_go_gtpt <- map(DE_go_gt_lst, ~gt_grob(.x))
+DE_go_gtpt
+```
+
+
+```{r, results='asis', fig.height=16.5, fig.width=12}
+## Save RDS for concatenating to manuscript plot
+saveRDS(DE_go_gtpt, "plots/DE_heatmaps/DE_go_gtpt.RDS")
+```
+
+```{r}
+##Print the DE GO tables separately for each ontology
+DE_go_gt_lst_sep_ont <- map(DE_go_std_pdb[1:2],
+    ~.x %>% 
+        mutate(across(Ontology, ~factor(., levels = c('Biological process', 'Cellular component', 'Molecular function')))) %>%
+        group_by(Ontology) %>%
+        group_split() %>%
+        setNames(sort(unique(.x$Ontology)))) %>% unlist(., recursive =F) 
+
+##!!! NOTE - manually set the NA description to 'obsolete pathogenesis' - this need to be updated either in the plasmoDB gaf or in the clusterprofiler database. Seems to be an obsolete ID as shown here https://www.ebi.ac.uk/QuickGO/term/GO:0009405 
+DE_go_gt_lst_sep_ont["lf_StrainsDE_MSC3_m_don2.Biological process"] <- DE_go_gt_lst_sep_ont["lf_StrainsDE_MSC3_m_don2.Biological process"] %>% map(~mutate(.x, across(Description, ~if_else(is.na(.), "obsolete pathogenesis", .))))
+      
+DE_go_gt_lst_sep_ont_tbl <- map2(DE_go_gt_lst_sep_ont, c(40,10,10,10),
+                 ~.x %>% 
+                   # group_by(Ontology) %>% 
+                   arrange(`p.adjust`) %>% 
+                   slice_head(., n=5) %>% 
+                   ungroup()  %>% 
+                   dplyr::select(c('Ontology', 'Description', 'GeneRatio')) %>% rename(c('Gene\nRatio'= GeneRatio)) %>%  
+                   mutate(Description = str_wrap(Description, width = 40)) %>%  
+                   gt() %>% 
+                   data_color(method = 'factor', columns = 'Ontology', target_columns = c('Description', 'Gene\nRatio'), palette = 'Pastel2') %>% cols_hide('Ontology') %>% 
+                   tab_options(table.width = pct(.y), column_labels.font.weight = 'bold')
+                 )
+
+DE_go_gt_lst_sep_ont_tbl
+```
+
+```{r, results='asis', fig.height=16.5, fig.width=12}
+##get gt tables as grob for merging using cowplot from gt github https://github.com/rstudio/gt/issues/961
+DE_go_sep_ont_gtpt <- map(DE_go_gt_lst_sep_ont_tbl, ~gt_grob(.x))
+saveRDS(DE_go_sep_ont_gtpt, "plots/DE_heatmaps/DE_go_sep_ont_gtpt.RDS")
+
+DE_go_sep_ont_gtpt
+```
+
+```{r, results='asis', fig.height=4, fig.width=11}
+go_bar_fn(m_abspres_go_std_pdb[[1]], ttl = names(m_abspres_go_std_pdb[1]))
+```
+
+
+```{r, results='asis', fig.height=4, fig.width=11}
+c(fh_only_abspres_go_std_pdb, fl_abspres_go_std_pdb, ml_abspres_go_std_pdb, fl_noasex_abspres_go_std_pdb, ml_noasex_abspres_go_std_pdb, all_abspres_go_std_pdb, gam_noasex_abspres_go_std_pdb, asex_nogam_abspres_go_std_pdb) %>% imap(., ~.x %>% filter(p.adjust < 0.05) %>% arrange(p.adjust) %>% slice_head(n = 10) %>% go_bar_fn(., ttl=.y))
+# go_bar_fn(fh_only_abspres_go_std_pdb[[1]])
+```
+
+
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+unlist(fh_fl_go_std_pdb)  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('###### ',.y,'   \n')
+        tryCatch(print(enrichplot::dotplot(.x, font.size=18)), error = function(e){function() 'No overepresented/gsea GO terms'})
+        tryCatch(print(cnetplot(.x, showCategory=10)), error = function(e){function() 'No overepresented/gsea GO terms'})
+        cat('\n \n \n ')
+        cat("\n\n\n")
+      })
+
+```
+
+##### Female low vs female high pairwise {.tabset}
+
+```{r, results='asis'}
+# cat('## Visualize field parasites {.tabset}   \n')
+unlist(fh_fl_go_std_pdb)  %>% 
+      purrr::iwalk(.,~{
+        # create tabset for each group 
+        cat('###### ',.y,'   \n')
+        fh_fl_pwt = tryCatch(pairwise_termsim(.x), error = function(e){function() 'No overepresented/gsea GO terms'})
+        tryCatch(print(emapplot( fh_fl_pwt, node_scale=1.5,layout="kk")), error = function(e){function() 'No overepresented/gsea GO terms'})
+        # print(upsetplot(fh_fl_pwt))
+        # p1 <- treeplot(fh_fl_pwt)
+        # p2 <- treeplot(fh_fl_pwt, hclust_method = "average")
+        # print(aplot::plot_list(p1, p2, tag_levels='A'))
+        cat('\n \n \n ')
+        cat("\n\n\n")
+      })
+
+```
+
+
+```{r, results='asis', fig.height=16, fig.width=12}
+##get gt tables as grob for merging using cowplot from gt github https://github.com/rstudio/gt/issues/961
+
+##Get legend for the GO ontologies
+onts = c('Biological process', 'Cellular component', 'Molecular function')
+ont_lg <- cowplot::get_legend(data.frame(ont = onts) %>% ggplot(aes( y=1, fill=ont)) + scale_fill_manual(values = brewer.pal(n = 3, name = 'Pastel2') %>% set_names(onts)) + geom_bar() + theme(legend.direction = 'horizontal', legend.title = element_text(size = 14, face = 'bold'), legend.text = element_text(size = 14))+ guides(fill = guide_legend(title = 'Ontology:', nrow = 1)))
+
+##Save ontology legend above for use in other plots
+saveRDS(ont_lg, "plots/DE_heatmaps/ont_lg.RDS")
+
+##PUT plots together for the manuscript
+plt= plot_grid(stg_strn_distb_bar[[1]]+
+                 theme(axis.title.y = element_text(size = 16, face = 'plain'),
+                       axis.text.y = element_text(size = 15),
+                       legend.title = element_text(size = 16),
+                       legend.text = element_text(size = 15),
+                       strip.text =element_text(size=17,face="bold", colour = 'black'),
+                       legend.margin = margin(t=-5)),
+               NULL,
+               ggdraw(fld_gn_expression_specificity_upset_vn_don3)+
+                theme(plot.margin = margin(t=0.5, unit = "cm")),
+               plot_grid(plotlist = all_stg_gtpt[1:8], ncol = 5),
+               ont_lg,
+               NULL,
+               # us_s_lasonder,
+               nrow = 7, 
+               rel_heights = c(.17,0.01,.32,.27,0.02,0.01,.20),
+              labels = c('A','', 'B', 'C', '', '', ''),
+              label_size = 20
+               )
+plt
+save_plot('plots/figS26/final_pt.svg',plt, base_width = 12, base_height = 16.5)
+```
+
+## Phenoplasm database exploration
+
+```{r}
+## Read phenoplasm data http://phenoplasm.org/about.php
+phenopDB <- read_tsv('data/raw/phenoplasm_output/PhenoPlasmData.tsv')
+
+phenopDB %>% filter(Species == 'P. falciparum 3D7') %>% filter(Stage %in% c('Oocyst', 'Ookinete', 'Sporozoite') & !Phenotype %in% c('No difference'))
+
+```
+
+
+```{r}
+phenopDB_pf_pb_yoel_ortho <- phenopDB  %>% dplyr::select(Species,Gene ,Stage,Phenotype) %>% mutate(across(Phenotype, ~str_replace(., 'Difference from wild-type', 'Different (WT)'))) %>% distinct() %>% group_by(Gene, Stage) %>% mutate(across(c(Phenotype), ~paste(., collapse = ',')))  %>% ungroup() %>% distinct(pick(Gene, Stage, Phenotype), .keep_all = TRUE) %>%  pivot_wider(id_cols = c(Species, Gene), names_from = 'Stage', values_from = 'Phenotype')  %>% left_join(., ortho[,c('falciparum', 'berghei')], by= c('Gene'='berghei')) %>% left_join(., ortho[,c('falciparum', 'yoelii')], by= c('Gene'='yoelii')) %>% mutate(gene_id = coalesce(falciparum.x, falciparum.y, Gene)) %>% filter(str_detect(gene_id, 'PF3D7_')) %>%  mutate(across(gene_id, ~str_replace(., '_', '-')))
+
+# phenopDB_pf_pb_ortho_mosq <- phenopDB  %>% dplyr::select(Species,Gene ,Stage,Phenotype) %>% mutate(across(Phenotype, ~str_replace(., 'Difference from wild-type', 'Different (WT)'))) %>% distinct() %>% group_by(Gene, Stage) %>% mutate(across(c(Phenotype), ~paste(., collapse = ',')))  %>% ungroup() %>% distinct(pick(Gene, Stage, Phenotype), .keep_all = TRUE) %>%  pivot_wider(id_cols = c(Species, Gene), names_from = 'Stage', values_from = 'Phenotype')  %>% left_join(., ortho[,c('falciparum', 'berghei')], by= c('Gene'='berghei')) %>% mutate(gene_id = coalesce(falciparum,  Gene)) %>% filter(str_detect(gene_id, 'PF3D7_')) %>%  mutate(across(gene_id, ~str_replace(., '_', '-'))) %>% dplyr::select(-c(Asexual, Gametocyte, Liver, falciparum))
+
+```
+
+
+```{r}
+## Avg expression + mosquito needed genes + lasonder
+phenopDB_pf_pb_yoel_ortho_mosq_gnexp_lasonder_lst <- map(stg_expr_cellProp_lst[2:4], ~{phenopDB_pf_pb_yoel_ortho %>% dplyr::select(-c(Asexual, Gametocyte, Liver, falciparum.x,  falciparum.y)) %>% filter(if_any(c('Oocyst', 'Ookinete', 'Sporozoite'), ~!is.na(.) )) %>% left_join(., .x, by=c('gene_id'))  %>% mutate(across(lasonder, ~replace_na(., 'n'))) %>% mutate('Lasonder' = case_when(lasonder == 'y' ~ 'Yes', lasonder == 'n' ~ 'No'))})
+
+  
+```
+
+```{r}
+phenop_mosq_plts_facet <- map(phenopDB_pf_pb_yoel_ortho_mosq_gnexp_lasonder_lst, ~.x %>% pivot_longer(cols = c(Ookinete,Oocyst,Sporozoite), names_to = 'Stage', values_to = 'Phenotype') %>% filter(!is.na(Phenotype) & !Phenotype %in% c('No difference', 'Not tested')) %>% filter(!str_detect(Phenotype, ','))) %>% 
+  bind_rows(., .id= 'donor') %>%
+  mutate(across(donor, ~droplevels(factor(., levels = sample_id_lst)))) %>%
+  ggplot(aes(x= FLE_exp, y = F_exp, color = Lasonder, shape = Phenotype)) + 
+  geom_point() + 
+  geom_abline() + 
+  facet_wrap(. ~ donor)+
+  labs(x='Female (LE)', y='Female')  + 
+  theme_bw()+
+  barp_theme + 
+  theme(plot.title = element_text(size=16, hjust = .5, face = "bold"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.ticks.x = element_line(),
+        axis.text.x = element_text(size=15),
+        aspect.ratio = 1) +
+  guides(shape = guide_legend(title.position = "top"), color=guide_legend(title.position = "top"))
+
+
+
+phenop_mosq_plts_facet
+```
+
+```{r}
+phenop_mosq_plts_lst <- imap(phenopDB_pf_pb_yoel_ortho_mosq_gnexp_lasonder_lst, ~.x %>% pivot_longer(cols = c(Ookinete,Oocyst,Sporozoite), names_to = 'Stage', values_to = 'Phenotype') %>% filter(!is.na(Phenotype) & !Phenotype %in% c('No difference', 'Not tested')) %>% filter(!str_detect(Phenotype, ',')) %>% 
+                               ggplot(aes(x= FLE_exp, y = F_exp, color = Lasonder, shape = Phenotype)) + 
+                               geom_point() + 
+                               geom_abline() + 
+                               coord_fixed(ratio = 1, xlim = c(0, 4.5), ylim = c(0, 4.5)) +
+                              labs(x='Female (LE)', y='Female', title = .y)  + 
+                              theme_classic() + 
+                              theme(axis.title = element_text(size=15), 
+                              axis.text = element_text(size=15), 
+                              legend.title = element_text(size=15, face = 'bold'), 
+                              legend.text  = element_text(size=15),
+                              plot.title = element_text(size=16, hjust = .5, face = "bold"))
+)
+                             
+
+
+phenop_mosq_plts_lst
+```
+
+
+```{r}
+
+phenopDB_pf_pb_yoel_ortho_gam_gnexp_lasonder_lst <- map(stg_expr_cellProp_lst[2:4], ~{phenopDB_pf_pb_yoel_ortho %>% dplyr::select(-c(Asexual, Oocyst, Ookinete, Sporozoite, Liver, falciparum.x,  falciparum.y)) %>% filter(if_any(c('Gametocyte'), ~!is.na(.) )) %>% left_join(., .x, by=c('gene_id'))  %>% mutate(across(lasonder, ~replace_na(., 'n'))) %>% mutate('Lasonder' = case_when(lasonder == 'y' ~ 'Yes', lasonder == 'n' ~ 'No'))})
+```
+
+```{r}
+map(phenopDB_pf_pb_yoel_ortho_gam_gnexp_lasonder_lst, ~.x %>% pivot_longer(cols = c(Gametocyte), names_to = 'Stage', values_to = 'Phenotype') %>% filter(!is.na(Phenotype) & !Phenotype %in% c('No difference', 'Not tested')) %>% filter(!str_detect(Phenotype, ',')) %>% ggplot(aes(x= FLE_exp, y = F_exp, color = Lasonder, shape = Phenotype)) + geom_point() + geom_abline() + coord_fixed(ratio = 1, xlim = c(0, 4.5), ylim = c(0, 4.5)) + labs(x='Female (LE)', y='Female')  + theme_classic() + 
+  theme(axis.title = element_text(size=15), 
+        axis.text = element_text(size=15), 
+        legend.title = element_text(size=15, face = 'bold'), 
+        legend.text  = element_text(size=15)))
+
+
+
+```
+
+
+```{r}
+
+pheno_pf_mosq_gns <- map(stg_expr_cellProp_lst[2:4], ~{phenopDB %>% filter(Species == 'P. falciparum 3D7') %>% filter(Stage %in% c('Oocyst', 'Ookinete', 'Sporozoite') & !Phenotype %in% c('No difference', 'Not tested')) %>% mutate(across(Gene, ~str_replace(., '_', '-')), across(Phenotype, ~str_replace(., 'Difference from wild-type', 'Different (WT)'))) %>% left_join(., .x, by=c('Gene'= 'gene_id'))}) 
+
+pheno_pf_pb_mosq_gns <-  map(stg_expr_cellProp_lst[2:4], ~{phenopDB %>% filter(Species %in% c('P. falciparum 3D7', 'P. berghei ANKA')) %>% filter(Stage %in% c('Oocyst', 'Ookinete', 'Sporozoite') & !Phenotype %in% c('No difference','Not tested')) %>% left_join(., ortho %>% select(falciparum, berghei), by=c('Gene' = 'berghei')) %>% mutate(gene_id = coalesce(falciparum, Gene)) %>% mutate(across(gene_id, ~str_replace(., '_', '-')), across(Phenotype, ~str_replace(., 'Difference from wild-type', 'Different (WT)'))) %>% filter(str_detect(gene_id, 'PF3D7')) %>% left_join(., .x, by=c('gene_id'))  %>% mutate(across(lasonder, ~replace_na(., 'n'))) %>% mutate('Lasonder' = case_when(lasonder == 'y' ~ 'Yes', lasonder == 'n' ~ 'No'))}) 
+
+# phenopDB_ortho_mosq %>% left_join(., stg_expr_cellProp, by=c('gene_id'))  %>% mutate(across(lasonder, ~replace_na(., 'n'))) %>% mutate('Lasonder' = case_when(lasonder == 'y' ~ 'Yes', lasonder == 'n' ~ 'No')) %>% pivot_longer(cols = c(Ookinete,Oocyst,Sporozoite), names_to = 'Stage', values_to = 'Phenotype') %>% filter(!is.na(Phenotype))
+
+
+```
+
+```{r}
+# phenop_mosq_plts <- pheno_pf_pb_mosq_gns %>% ggplot(aes(x= FLE_exp, y = F_exp, color = Lasonder, shape = Phenotype)) + geom_point() + geom_abline() + coord_fixed(ratio = 1, xlim = c(0, 4.5), ylim = c(0, 4.5)) + labs(x='Female (LE)', y='Female')  + theme_classic() + 
+#   theme(axis.title = element_text(size=15), 
+#         axis.text = element_text(size=15), 
+#         legend.title = element_text(size=15, face = 'bold'), 
+#         legend.text  = element_text(size=15))
+# 
+# phenop_mosq_plts
+
+# pheno_pf_pb_mosq_gns  %>% ggplot(aes(x= FLE_celProp, y = F_celProp,  color= Lasonder,  shape= Phenotype)) + geom_point() + geom_abline()
+```
+
+
+
+
+```{r}
+
+map(pheno_pf_pb_mosq_gns, ~.x %>% mutate(across(lasonder, ~replace_na(., 'y')))   %>% mutate(across(lasonder, ~case_when(is.na(.) ~ 'n', T ~ .))) %>% filter(FLE_exp<0.2 & F_exp<0.25) %>% ggplot(aes(x= FLE_exp, y = F_exp, color = lasonder, shape = Phenotype)) + geom_point() + geom_abline())
+
+map(pheno_pf_pb_mosq_gns, ~.x  %>% mutate(across(lasonder, ~replace_na(., 'y')))   %>% ggplot(aes(x= FLE_celProp, y = F_celProp,  color= lasonder,  shape= Phenotype)) + geom_point() + geom_abline())
+```
+
+
+```{r}
+
+pheno_pf_ag_gns <- map(stg_expr_cellProp_lst[2:4], ~{phenopDB %>% filter(Species == 'P. falciparum 3D7') %>% filter(Stage %in% c('Asexual', 'Gametocyte') & !Phenotype %in% c('No difference')) %>% mutate(across(Gene, ~str_replace(., '_', '-'))) %>% left_join(., .x, by=c('Gene'= 'gene_id')) %>% slice_sample(., n=150)})
+
+pheno_pf_pb_ag_gns <- map(stg_expr_cellProp_lst[2:4], ~{phenopDB %>% filter(Species %in% c('P. falciparum 3D7', 'P. berghei ANKA')) %>% filter(Stage %in% c('Asexual', 'Gametocyte') & !Phenotype %in% c('No difference')) %>% left_join(., ortho, by=c('Gene' = 'berghei')) %>% mutate(gene_id = coalesce(falciparum, Gene)) %>% mutate(across(gene_id, ~str_replace(., '_', '-'))) %>% filter(str_detect(gene_id, 'PF3D7')) %>% left_join(., .x, by=c('gene_id'))  %>% slice_sample(., n=150)})
+
+map(pheno_pf_pb_ag_gns, ~.x  %>% ggplot(aes(x= FLE_exp, y = F_exp, shape = Species,color = Phenotype)) + geom_point() + geom_abline())
+
+map(pheno_pf_pb_ag_gns, ~.x  %>% ggplot(aes(x= FLE_celProp, y = F_celProp, shape = Species, color = Phenotype)) + geom_point() + geom_abline())
+```
+
+
+```{r}
+##read table with fhe fle unspliced spliced counts for manuscript
+fhe_fle_ussr_dta = readRDS("v3_science_manuscript/tables/fhe_fle_ussr_dta.RDS")  %>% mutate(across(everything(), ~ifelse(is.nan(.) | is.infinite(.), NA, .)))
+
+phenopDB_pf_pb_yoel_ortho_mosq_gnexp_lasonder_export = phenopDB_pf_pb_yoel_ortho_mosq_gnexp_lasonder_lst[["MSC14"]] %>% dplyr::select(c("Species", "Gene", "Disruption", "Ookinete", "Oocyst", "Sporozoite",  "gene_id", "F_exp", "FLE_exp", "F_celProp", "FLE_celProp", "Lasonder"))
+
+##Put the unspliced and average expression tables in one list
+ussr_avg_exprsn_dta <- list(fhe_fle_ussr_dta, phenopDB_pf_pb_yoel_ortho_mosq_gnexp_lasonder_export) %>% set_names(c('8.Unspliced-spliced ratios', '9.Msq phenoplasm gns & exp'))
+```
+
+
+
+```{r, results='asis', fig.height=4, fig.width=12}
+us_s_lasonder <- plot_grid(fhe_fle_ussr, 
+                         phenop_mosq_plts_lst[[3]] + 
+  theme(legend.position = 'bottom',
+        legend.direction = 'vertical',
+        legend.spacing.x = unit(-0.04, units = 'cm'),
+        legend.box.spacing = unit(-0.08, units = 'cm')),
+                         fhe_fle_umap[[1]]+
+  theme(legend.text = element_text(size = 11),
+        plot.margin = margin(t=1, unit = "cm")),
+  mhe_mle_umap[[1]]+
+  theme(legend.text = element_text(size = 11),
+        plot.margin = margin(t=1, unit = "cm")),
+                         ncol = 4,
+                         rel_widths = c(.22, .28,.25,.25),
+              labels = c('D', 'E', 'F', 'G'),
+              label_size = 20)
+
+us_s_lasonder
+```
+
+
+```{r, results='asis', fig.height=4, fig.width=12}
+## combine plots for LE exploration
+core_g_lg <- cowplot::get_legend(mml_core_gns_barp + 
+  theme(legend.position = 'bottom') +
+    guides(fill=guide_legend(title.position = "top", nrow = 2, title = "Stage")))
+
+
+fl_ml_mosq_pt <- plot_grid(
+  phenop_mosq_plts_facet,
+  plot_grid(
+    plot_grid(plotlist = map(list(ffl_core_gns_barp, mml_core_gns_barp), ~.x +
+                               theme(legend.position = 'none',
+                                     # plot.margin = margin(t=1, unit = "cm")
+                                     )),
+              rel_widths = c(.6,.4)),
+  core_g_lg,
+    nrow = 2,
+    rel_heights = c(.8,.2)),
+  ncol = 2,
+                         rel_widths = c(.5,.5),
+              labels = c('D', 'E'),
+              label_size = 20)
+
+fl_ml_mosq_pt
+```
+
+
+```{r, results='asis', fig.height=16, fig.width=12}
+##get gt tables as grob for merging using cowplot from gt github https://github.com/rstudio/gt/issues/961
+
+##Get legend for the GO ontologies
+onts = c('Biological process', 'Cellular component', 'Molecular function')
+ont_lg <- cowplot::get_legend(data.frame(ont = onts) %>% ggplot(aes( y=1, fill=ont)) + scale_fill_manual(values = brewer.pal(n = 3, name = 'Pastel2') %>% set_names(onts)) + geom_bar() + theme(legend.direction = 'horizontal', legend.title = element_text(size = 14, face = 'bold'), legend.text = element_text(size = 14))+ guides(fill = guide_legend(title = 'Ontology:', nrow = 1)))
+
+##Save ontology legend above for use in other plots
+saveRDS(ont_lg, "plots/DE_heatmaps/ont_lg.RDS")
+
+##PUT plots together for the manuscript
+plt= plot_grid(stg_strn_distb_bar[[1]]+
+                 theme(axis.title.y = element_text(size = 16, face = 'plain'),
+                       axis.text.y = element_text(size = 15),
+                       legend.title = element_text(size = 16),
+                       legend.text = element_text(size = 15),
+                       strip.text =element_text(size=17,face="bold", colour = 'black'),
+                       legend.margin = margin(t=-5)),
+               NULL,
+               ggdraw(fld_gn_expression_specificity_upset_vn_don3)+
+                theme(plot.margin = margin(t=0.5, unit = "cm")),
+               plot_grid(plotlist = all_stg_gtpt[1:8], ncol = 5),
+               ont_lg,
+               NULL,
+               us_s_lasonder,
+               nrow = 7, 
+               rel_heights = c(.17,0.01,.32,.27,0.02,0.01,.20),
+              labels = c('A','', 'B', 'C', '', '', ''),
+              label_size = 20
+               )
+plt
+save_plot('plots/figS26/final_pt.svg',plt, base_width = 12, base_height = 16.5)
+```
