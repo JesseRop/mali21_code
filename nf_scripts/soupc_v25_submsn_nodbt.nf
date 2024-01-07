@@ -19,14 +19,6 @@ params.o_dir= "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/p
 ncores="20"
 mem="140 GB"
 
-// params.algn_nm = "hsat"
-// params.algner = "HISAT2"
-
-// params.algn_nm = ("minmap", "hsat")
-// params.algner = ("minimap2", "HISAT2")
-
-// Channel.of(params.algn_nm).view()
-
 params.soup_dir = "soupc_no_dbt"
 
 params.scrpt = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/multipurpose_scripts/soupc_v25_hsat.sh"
@@ -81,9 +73,6 @@ process SOUPC1 {
     
 }
 
-// ncores="5"
-// mem="30 GB"
-
 // cp ${out_dir}/{vartrix.done,alt.mtx,ref.mtx,barcodes.tsv,bcftools.err,souporcell_merged_sorted_vcf.vcf.gz,souporcell_merged_sorted_vcf.vcf.gz.tbi,retagging.done,souporcell_minimap_tagged_sorted.bam.bai,souporcell_minimap_tagged_sorted.bam,retag.err,remapping.done,minimap.err,fastqs.done} out_dir_k${k}/
 // cp ${bcodes} out_dir_k${k}/barcodes.tsv
 
@@ -126,41 +115,6 @@ process SOUPC_2PLUS {
     grep -H 'best total log probability' clusters.err > clusters_log_likelihoods_${k}.txt
 	"""			
 }
-
-
-// process SOUPC_2PLUS {
-//     memory '30 GB'
-//     cpus '4'
-
-//     tag "Souporcell k${k} ${sample_nm}  reads"
-
-//     publishDir "$params.o_dir/${sample_nm}/${params.soup_dir}/${algn_nm}/k${k}/", mode: 'copy', overwrite: true
-
-//     input:
-// 	tuple val(sample_nm), val(algn_nm), val(algnr), path(bcodes), path(bam), path(bai), path(out_dir)
-//     // val(algnr)
-//     each(k)
-		
-//     output:
-//     // tuple val(sample_nm), path('*')
-//     // tuple val(sample_nm), path('out_dir_k*/clusters.tsv'), path('out_dir_k*/cluster_genotypes.vcf'), path('out_dir_k*/ambient_rna.txt'), path('clusters_log_likelihoods*')
-//     tuple val(sample_nm), val(algn_nm), path('clusters.tsv'), path('cluster_genotypes.vcf'), path('ambient_rna.txt'), path('clusters_log_likelihoods*')  
-
-// 	script:
-// 	"""
-//     mkdir out_dir_k${k}
-//     cp ${out_dir}/{vartrix.done,alt.mtx,ref.mtx,bcftools.err,souporcell_merged_sorted_vcf.vcf.gz,souporcell_merged_sorted_vcf.vcf.gz.tbi,retagging.done,souporcell_minimap_tagged_sorted.bam.bai,souporcell_minimap_tagged_sorted.bam,retag.err,remapping.done,minimap.err,fastqs.done} out_dir_k${k}/
-//     cp ${bcodes} out_dir_k${k}/barcodes.tsv
-
-//     echo 'out_dir_k${k}/souporcell_merged_sorted_vcf.vcf.gz' > out_dir_k${k}/variants.done
-	
-//     ${params.scrpt} ${bam} out_dir_k${k}/barcodes.tsv ${k} ${algnr} ${params.ref} out_dir_k${k} ${ncores}
-
-//     cp out_dir_k*/cluster* out_dir_k*/ambient_rna.txt .
-
-//     grep -H 'best total log probability' out_dir_k${k}/clusters.err > clusters_log_likelihoods_${k}.txt
-// 	"""			
-// }
 
 
 process LL_KNEE_PLOT {
