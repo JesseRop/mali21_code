@@ -1,0 +1,419 @@
+---
+title: "Plots for Wolfson global health and MAM 2024 poster"
+date: "2023-07-05"
+author: 'Jesse Rop'
+output:
+  html_document:
+    toc: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(sctransform)
+  library(rgl)
+  library(patchwork)
+  library(ggrepel)
+  library(ggpubr)
+  library(dplyr) 
+  library(stringr)
+  library(purrr)
+  library(readr)
+  library(tibble)
+  library(ggplot2)
+  library(ggnewscale)
+  library(tidyr)
+  library(cowplot)
+  library(scDblFinder)
+  library(SeuratData)
+  library(SeuratDisk)
+  library(scmap)
+  library(SingleCellExperiment)
+  library(pheatmap)
+  library(plotly)
+  library(Hmisc)
+  library(rmarkdown)
+  library(RColorBrewer)
+  # library(MAST)
+  library(Platypus)
+  library(ggvenn)
+  library('biomaRt')
+  library(conflicted)
+  library(SoupX)
+  library(MetBrewer)
+  library(knitr)
+  library(readxl)
+  library(SCpubr)
+  library(ggh4x)
+  library(htmlwidgets)
+  library(slingshot)
+  library(harmony)
+  library(ggforce)
+  library(svglite)
+  conflict_prefer("select", "dplyr")
+  conflict_prefer("filter", "dplyr")
+  conflict_prefer("rename", "dplyr")
+})
+```
+
+
+# MSC annotation
+
+## Variable declarations, read in input files and exploratory visualizations
+
+
+```{r}
+
+
+
+sp_colors <- c('Early ring'='#D1EC9F',
+                     'Late ring'='#78C679',
+                     'Early trophozoite'='#FEEEAA',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                     'Gametocyte (developing)'='thistle',
+                     'Gametocyte (female)'='#551A8B',
+                     'Gametocyte (male)'='mediumpurple',
+               'Unassigned'='red', 
+               'Not assigned'='#D6CFC7',
+               'Female (LE)'='#208cf7',
+               'Female'='#551A8B',
+               # 'Female (HE)'='#551A8B',
+               'Male (LE)'='#a894d1',
+               'Male'='mediumpurple',
+               # 'Male (HE)'='mediumpurple',
+               'Failed QC' = 'grey',
+               'Gametocyte (committed)' = '#C399A2', 
+               'Gametocyte (developing)' = '#66444C', 
+               'Gametocyte (branching)' = '#66444C', 
+               'Gametocyte (early female)' = '#749E89', 
+               'Gametocyte (early male)' = '#7D87B2', 
+               'Gametocyte (late female)' = '#4E6D58', 
+               'Gametocyte (late male)' = '#41507B',
+                   NULL = 'lightgrey'
+)
+
+sp_fld_colors <- c('Late ring'= '#78C679',#met.brewer('Java')[2],
+                   'Early trophozoite'='#FEEEAA',#met.brewer('Java')[3],
+                   'Female (LE)'= met.brewer('Ingres')[5],
+                   'Female'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Female (HE)'= '#551A8B', #met.brewer('Ingres')[7],
+                   # 'Male (LE)'=met.brewer('Nizami')[6],
+                   # 'Male (HE)'=met.brewer('Nizami')[8],
+                   # 'Gametocyte (male)'=met.brewer('Austria')[5],
+                   'Male (LE)'=met.brewer('Ingres')[7],#'#a2e19e',
+                   'Male'= 'mediumpurple',#'#039911',
+                   ## 'Male (HE)'= 'mediumpurple',#'#039911',
+                   'Gametocyte (male)'='#3DED97',
+                   'Gametocyte (female)'=met.brewer('Ingres')[6],
+                   'Lab' = '#D3D3D3',
+                   'Unassigned'='#DCDCDC',
+                   'Failed QC' = 'grey',
+                   'Not assigned' = 'grey',
+                   'Atlas' = 'grey',
+                   'Early ring'='#D1EC9F',
+                     'Late trophozoite'='#FEB24C',
+                     'Early schizont'='#C9E8F1',
+                     'Late schizont'='#85B1D3',
+                   'Gametocyte (developing)'='thistle',
+                   'early female' = '#749E89',
+                   'late female'= '#4E6D58',
+                   NULL = 'lightgrey'
+)
+
+cluster_cols <- brewer.pal(7, name = 'Set2') %>% set_names(as.character(c(0:6)))
+
+
+
+stg_lvls = c("Early ring", "Late ring", "Early trophozoite","Late trophozoite" , "Early schizont", "Late schizont",  "Gametocyte (developing)", "Female (HE)", "Female", "Female (LE)",  "Gametocyte (female)", "Male (HE)", "Male", "Male (LE)", "Gametocyte (male)", "Unassigned", "Failed QC", "Not assigned")
+
+stg_refnd_lvls = c("Early ring", "Late ring", "Early trophozoite", "Late trophozoite", "Early schizont", "Late schizont", "Gametocyte (committed)", "Gametocyte (developing)", "Gametocyte (branching)", "Female (HE)", "Female", "Female (LE)", "Gametocyte (female)", "Gametocyte (early female)", "Gametocyte (late female)", "Gametocyte (male)", "Male (HE)", "Male", "Male (LE)", "Gametocyte (early male)", "Gametocyte (late male)", "Unassigned", "Failed qc", "Not assigned", "Atlas")
+
+stg_refnd_lvls2 = c('Early ring','Late ring','Early trophozoite','Late trophozoite','Early schizont','Late schizont', "Gametocyte (committed)","Gametocyte (developing)","Gametocyte (branching)", "Female (HE)", "Female", "Female (LE)", "Gametocyte (early female)","Gametocyte (late female)", "Male (HE)", "Male", "Male (LE)", "Gametocyte (early male)","Gametocyte (late male)", "Unassigned", "Failed QC", "Not assigned") #%>% str_to_sentence(.)
+
+# donor_cols_m = met.brewer("Egypt")[c(2,4,1,3)] %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ), '.mrna'))
+# donor_cols_m = met.brewer("Thomas")[c(6,3,1,2)]  %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ), '.mrna'))
+donor_cols_m = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ), '.mrna'))
+# donor_cols = met.brewer("Egypt")[c(2,4,1,3)] %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" )))
+donor_cols = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" )))
+# donor_cols_cap = c(met.brewer("Thomas")[c(1)],c('#F39EC8','#99ceff', '#b9e589')) %>% str_to_upper(set_names(paste0(c("MSC1", "MSC3", "MSC13", "MSC14" ))))
+
+
+```
+
+```{r pressure, echo=FALSE}
+# ggplot(cars, aes(x= dist, y =speed)) +
+#   geom_point()
+# graph2ppt(file = '/Users/jr35/Google Drive/My Drive/PHD_documents/test_exp2')
+```
+
+```{r}
+##Strain cluster colours
+
+strain_cols_n <-c("#910000", "#ff1a8d", "#007c71", "#0ea300", "#00deca", "#9a96c7", "#5d57a4", "#a8875b","#708db3", "#c39a00", "#ffd94d", "#9770b3", "#C9E0F1", "#a40000" , "#00b7a7", "#ffcd12","thistle","#a40000" , "#00b7a7", "#e7f1f9", 'black', 'grey')
+#, 'lavender', 'lightgray', 'grey'
+names(strain_cols_n) <- c('SC2', 'SC1','SC5',  'SC4', 'SC3',  'SC6', 'SC7', 'SC8', 'S3_S1', 'S1_p_i','S1_b', 'S2_b', 'S3_b', 'S1', 'S2', 'S3', 'Doublet', 'SC1_3i','Negative', 'Lab', 'Less5', NA)
+
+
+# strain_cols <- c(met.brewer(name = 'Austria')[c(1,7, 4,5,6, 7, 8)], 'light gray')
+strain_cols <- c(met.brewer(name = 'Thomas')[c(1:8)],'black', 'light gray')
+# names(strain_cols) = c('Strain 0', 'Strain 1', 'Strain 2', 'Doublet', 'Negative')
+names(strain_cols) = c('G1', 'G2', 'G3', 'G4','G5', 'G6','G7', 'G8', 'Doublet', 'Negative')
+# strain_cols = c("Strain 2" = "#dd5129", "Strain 1"= "#0f7ba2", "Strain 0"="#43b284", "Doublet"="#fab255")
+strain_cols =c(strain_cols,strain_cols_n)
+
+strain_dset_lvls = c( 'SC1', 'SC2','SC3',  'SC4', 'SC5',  'SC6', 'SC7', 'SC8')
+
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '/Users/jr35/Google Drive/My Drive/PHD_documents/malaria_phd/Mali')
+```
+
+
+initialize variable for the sample names
+
+```{r}
+# sample_id <- c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" )
+# sample_id_lst <-as.list(c("MSC1", "MSC3", "MSC1272", "MSC13", "MSC14" ) %>% 
+#                           str_sort(., numeric = T))
+sample_id_lst <-as.list(c("MSC1", "MSC3",  "MSC13", "MSC14" ) %>% 
+                          str_sort(., numeric = T))
+# mt_filt <- c(5,1.2,1,0.45,2)
+mt_filt <- c(5,1.2,1,0.45)
+sample_name_nms<-sample_id_lst
+# optimum_k = c(5,2,2,8,2) %>% set_names(sample_name_nms)
+optimum_k = c(5,2,2,8) %>% set_names(sample_name_nms)
+```
+
+```{r}
+##Read MCA V3 blood stage reference dataset
+# EF_V3_ref <- readRDS("../sc_velo/data/raw/RoadtoUMAP/pseudotime/raw_combined_cut_0.4.RDS")
+EF_V3_ref_mam <- readRDS("data/raw/mca_v3_ref/raw_combined_cut_0.4_nodoublets_stagenew.RDS")
+```
+
+
+```{r}
+
+##Plotting top two scmap stages among the top 10 with their similarities for msc14
+anot_umaps_st_nolabs <- readRDS('plots/msc_stage_anno_all/anot_umaps_st_nolabs.RDS')
+my21_mca_umap_stg <- readRDS('plots/msc_stage_anno_all/my21_mca_umap_stg.RDS')
+viol_gn_cnt_cln_clst_manual <- readRDS('plots/msc_stage_anno_all/viol_gn_cnt_cln_clst_manual.RDS')
+
+don_f_plt <- readRDS('plots/msc_integration_all/don_f_plt.RDS')
+cnts_plt <- readRDS('plots/msc_integration_all/cnts_plt.RDS')
+stages_umap <- readRDS('plots/msc_integration_all/stages_umap.RDS')
+
+
+msc13_14_ls_bar_dist <- readRDS('plots/msc_strain_stage_viz_all/msc13_14_ls_bar_dist.RDS')
+ss_bar_plt <- readRDS("plots/msc_strain_stage_viz_all/ss_bar_plt.RDS")
+
+sumap <- readRDS('plots/msc_strain_stage_viz_all/sumap.RDS')
+m14_femDE_cells<- readRDS("plots/msc_strain_stage_viz_all/m14_femDE_cells.RDS")
+
+gams_vn <- readRDS('plots/msc_LE_explr_coregns_corr/gams_vn.RDS')
+gam_corrs14_13 <- readRDS('plots/msc_LE_explr_coregns_corr/gam_corrs14_13.RDS')
+gam_corrsm14_13 <- readRDS('plots/msc_LE_explr_coregns_corr/gam_corrsm14_13.RDS')
+
+ss_afm_chromp <- readRDS('plots/msc_strain_deconv_refnd_all/ss_afm_chromp.RDS')
+ss_afm_chromp <- readRDS('plots/msc_strain_deconv_refnd_all/ss_afm_chromp.RDS')
+chromp_legend_pt <- readRDS('plots/msc_strain_deconv_refnd_all/chromp_legend_pt.RDS')
+
+
+sibd_pht <- readRDS('plots/msc_strain_deconv_refnd_all/sibd_pht.RDS')
+
+```
+
+
+```{r}
+DimPlot(EF_V3_ref_mam)
+
+```
+
+```{r, fig.height= 6, fig.width=6}
+
+trunc_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(2.6, "cm")
+)
+
+##Visualize reference datasets
+umap_theme <- theme(legend.position = 'right',
+        axis.title=element_text(size=18,face="bold",hjust = 0),
+        # plot.title = element_blank(),
+        legend.title=element_text(size=14,face="bold"),
+        legend.text=element_text(size=14),
+        legend.spacing.y = unit(0.25, "cm"),
+        axis.line = element_line(arrow = arrow(angle = 20, length = unit(0.15, "inches"), ends = "last", type = "closed"))
+        ) 
+
+EF_V3_ref_postr <- DimPlot(EF_V3_ref, reduction = "umap", label = T, group.by = 'stagenewx', pt.size = 2, dims = c(2,3), label.size = 8)+
+  scale_color_manual(values = sp_colors)+
+    umap_theme+
+    theme(plot.title = element_blank(),
+          legend.position = "none")+
+  guides(x= trunc_axis,
+         y= trunc_axis)+
+  scale_x_continuous(breaks = NULL) +
+  scale_y_continuous(breaks = NULL)
+
+EF_V3_ref_postr
+```
+
+```{r, fig.height= 4, fig.width=4}
+svglite("plots/msc_stage_anno_all/EF_V3_ref_postr.svg",width = 6, height = 6)
+EF_V3_ref_postr
+dev.off()
+```
+
+```{r, fig.height= 4, fig.width=4}
+
+my21_mca_umap_stg_postr <- my21_mca_umap_stg[[4]] +
+  theme(legend.position = "none")
+```
+
+```{r, fig.height= 4, fig.width=4}
+svglite("plots/msc_stage_anno_all/my21_mca_umap_stg_postr.svg",width = 6, height = 6)
+my21_mca_umap_stg_postr
+dev.off()
+```
+
+```{r, fig.height= 4, fig.width=4}
+map(anot_umaps_st_nolabs, ~.x +
+      theme(legend.position = "none",
+            axis.title = element_text(size=16,face="bold",hjust = 0),
+            title = element_text(size = 20,face="bold")))
+```
+
+```{r}
+
+my21_mca_umap_stg[[4]]
+```
+
+```{r, fig.height= 2.8, fig.width=9.4}
+viol_gn_cnt_cln_clst_manual + 
+  labs(x = "Cluster") + 
+  # theme(axis.text.x = element_blank(),
+  #       axis.title.x = element_blank(),
+  #       axis.ticks.x = element_blank()
+  #       )+
+  guides(color = guide_legend(title = 'Stage',override.aes = list(size = 2), nrow = 1))
+```
+
+
+```{r, fig.height= 4.8, fig.width=3}
+don_f_plt+
+      theme(axis.title = element_text(size=16,face="bold",hjust = 0),
+            legend.title = element_text(size = 20,face="bold"),
+            legend.text = element_text(size = 20))
+```
+
+```{r, fig.height= 4.8, fig.width=3}
+
+cnts_plt+
+      theme(axis.title = element_text(size=16,face="bold",hjust = 0),
+            legend.title = element_text(size = 20,face="bold"),
+            legend.text = element_text(size = 20))+
+    guides(colour = guide_colorbar(title.position = "top", barwidth = unit(6.5, "cm")))
+```
+
+```{r, fig.height= 4.8, fig.width=3.2}
+stages_umap+
+      theme(axis.title = element_text(size=16,face="bold",hjust = 0),
+            legend.title = element_text(size = 20,face="bold"),
+            legend.text = element_text(size = 20))+
+  guides(color = guide_legend(title = 'Stage',override.aes = list(size = 4), nrow = 4))
+```
+
+
+
+```{r}
+ss_bar_plt[[4]]
+```
+
+```{r, fig.height= 3.8, fig.width=5.5}
+
+map2(sumap,str_remove(names(sumap), "_.*"), ~.x +
+      labs(title = .y)+
+      theme(legend.position = "none",
+            axis.title = element_text(size = 24, face = "plain"),
+            plot.title = element_text(hjust = 0.5, face = "bold", size = 24)))
+```
+
+```{r, fig.height= 1, fig.width=10}
+
+plot_grid(
+  get_legend(sumap[[4]] + 
+               theme(legend.position = "right") +
+               guides(color = guide_legend(nrow = 1,override.aes = list(size = 4), title.position = "left")))
+  )
+```
+
+```{r, fig.height= 4, fig.width=5.5}
+
+plot_grid(
+  get_legend(sumap[[4]] + 
+               theme(legend.position = "right") +
+               guides(color = guide_legend(ncol = 2)))
+  )
+```
+
+```{r}
+m14_femDE_cells[[1]]
+```
+
+```{r, fig.height= 3, fig.width=3}
+gams_vn
+```
+
+
+```{r, fig.height= 2.26, fig.width=2.26}
+gam_corrs14_13[[2]]
+```
+
+```{r, fig.height= 2.26, fig.width=2.26}
+gam_corrsm14_13[[2]]
+
+```
+
+```{r, fig.height= 2.5, fig.width=2.5}
+ss_afm_chromp[["msc14.strain_qcd"]][["SC2_vs_SC5"]]
+ss_afm_chromp[["msc14.strain_qcd"]][["SC5_vs_SC7"]]
+```
+
+
+```{r, fig.height= 4, fig.width=7}
+pt <- chromp_legend_pt + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold")) +
+  guides(fill = guide_legend(override.aes = list(size = 2), nrow = 1, title.position = "top"))
+pt
+```
+
+
+```{r, fig.height= 0.45, fig.width=3.2}
+plot_grid(get_legend(pt))
+```
+
+```{r, fig.height= 4, fig.width=4.1}
+sibd_pht
+```
+
+```{r}
+# plot_grid(plotlist = map(anot_umaps_st[1:4], ~.+ theme(legend.position = "none", axis.text = element_blank())), ncol = 4),
+#           viol_gn_cnt_cln +theme(legend.position = "none"),
+#           
+#           gam_hl_vn <- map(c(gams_3_13_14_vn[1], gams_vn), ~.x + theme(text = element_text(size = 14), aspect.ratio=2/4))
+# 
+# 
+# strn_pts <- map2(sumap, stg_col_sumap, ~plot_grid(.x + theme(legend.position = "none", plot.margin = margin(t=0.3, r= 0.3, b=0.3, l= 0.3, unit = "cm")),
+#                                                    .y + theme(legend.position = "none", plot.margin = margin(t=0.3, r= 0.3, b=0.3, l= 0.3, unit = "cm")),
+#                                                    
+#                                                    strn_lgnd <- cowplot::get_legend(sumap[[4]])
+#                                         ncol = 2) +  panel_border()
+#                   )
+```
