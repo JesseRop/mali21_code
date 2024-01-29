@@ -11,18 +11,19 @@ params.bam = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/ra
 
 
 // barcodes with doublets removed
-// params.bcodes = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/msc14/bcodes/*/barcodes.tsv"
-params.bcodes = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/msc*/bcodes/*/bcodes_no_dbt/barcodes.tsv"
+params.bcodes = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/msc*/bcodes/*/barcodes.tsv"
+// params.bcodes = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star/msc*/bcodes/*/bcodes_no_dbt/barcodes.tsv"
 
 params.o_dir= "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/Mali/data/processed/DB52e_star"
 
 ncores="20"
-mem="140 GB"
+mem="80 GB"
 
-params.soup_dir = "soupc_no_dbt"
+params.soup_dir = "soupc_310"
 
-params.scrpt = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/multipurpose_scripts/soupc_v25_hsat.sh"
-params.ref  = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/Pf3D7_genomes_gtfs_indexs/hisat_refs/Pfalciparum.genome.fasta"
+params.scrpt = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/phd/multipurpose_scripts/soupc_v25_mnmap_hsat_310.sh"
+// params.ref  = "/lustre/scratch126/tol/teams/lawniczak/users/jr35/Pf3D7_genomes_gtfs_indexs/hisat_refs/Pfalciparum.genome.fasta"
+
 
 bam_ch = Channel
 				.fromPath(params.bam)
@@ -35,9 +36,9 @@ bcodes_al_ch = Channel
 				.map { file -> tuple(file.getParent().toString().split('\\/')[13], file.getParent().toString().split('\\/')[15], file) }
                 .branch {
                     hsat_paths: it[1] == 'hsat'
-                        return tuple(it[0], it[1], "HISAT2", it[2])
+                        return tuple(it[0], it[1], "HISAT2", it[2], "/lustre/scratch126/tol/teams/lawniczak/users/jr35/Pf3D7_genomes_gtfs_indexs/hisat_refs/Pfalciparum.genome.fasta")
                     minmap_paths: it[1] == 'minmap'
-                        return tuple(it[0], it[1], "minimap2", it[2])
+                        return tuple(it[0], it[1], "minimap2", it[2], "/lustre/scratch126/tol/teams/lawniczak/users/jr35/Pf3D7_genomes_gtfs_indexs/PlasmoDB-52_Pfalciparum3D7_Genome.fasta")
                 }
 
 bcodes_ch = bcodes_al_ch.hsat_paths.concat(bcodes_al_ch.minmap_paths)
@@ -45,20 +46,21 @@ bcodes_ch = bcodes_al_ch.hsat_paths.concat(bcodes_al_ch.minmap_paths)
 bcodes_bam_ch = bcodes_ch.combine(bam_ch, by:0)
 // bcodes_bam_ch.view()
 
-k_ch = Channel.from( 1..15 )
+k_ch = Channel.from( 1..10 )
 // k_ch.view()
 
 process SOUPC1 {
     memory "${mem}"
     cpus "${ncores}"
+    errorStrategy 'ignore'
 
     tag "Souporcell k1 ${sample_nm}  reads"
 
     // publishDir params.outdir_index_temp, mode: "copy"
-    publishDir "$params.o_dir/${sample_nm}/${params.soup_dir}/${algn_nm}/parent/", mode: 'copy'
+    publishDir "$params.o_dir/${sample_nm}/${params.soup_dir}/${algn_nm}/parent/", mode: 'copy', overwrite: true
 
     input:
-    tuple val(sample_nm), val(algn_nm), val(algnr), path(bcodes), path(bam), path(bai)
+    tuple val(sample_nm), val(algn_nm), val(algnr), path(bcodes), val(ref), path(bam), path(bai)
     // val(algnr)
 	
     output:
@@ -67,7 +69,7 @@ process SOUPC1 {
 	script:
 	"""
     
-    ${params.scrpt} ${bam} ${bcodes} 1 ${algnr} ${params.ref} out_dir ${ncores}
+    ${params.scrpt} ${bam} ${bcodes} 1 ${algnr} ${ref} out_dir ${ncores}
     
 	"""			
     
@@ -134,7 +136,7 @@ process LL_KNEE_PLOT {
     
 	script:
 	"""
-    cat $clst_err > clusters_log_likelihoods.txt
+    grep "" $clst_err > clusters_log_likelihoods.txt
     
 	"""			
 }
@@ -142,9 +144,11 @@ process LL_KNEE_PLOT {
 workflow {
     
     soupc1_ch = SOUPC1(bcodes_bam_ch)
-    soupc1_ch.view()
+    // soupc1_ch.view()
 
-    bcodes_bam_soupc_ch = bcodes_bam_ch.combine(soupc1_ch, by:[0,1])
+    bcodes_bam_soupc_ch = bcodes_bam_ch
+        .map { file -> tuple(file[0], file[1], file[2], file[3], file[5], file[6]) }
+        .combine(soupc1_ch, by:[0,1])
     bcodes_bam_soupc_ch.view()
     
     soupc2plus_ch = SOUPC_2PLUS(bcodes_bam_soupc_ch, k_ch)
